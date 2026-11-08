@@ -72,18 +72,20 @@ async function readSSE(body: ReadableStream<Uint8Array>, on: (s: string) => void
   const tc = calls.filter(Boolean).map((c, i) => ({ ...c, id: c.id || "call_" + i }));
   return { choices: [{ message: { role: "assistant", content, ...(tc.length ? { tool_calls: tc } : {}) } }], usage, __streamed: streamed } as any;
 }
+/** Your Syok address, with or without a trailing slash or /v1 (the Developer API page shows it with /v1). */
+export const chatUrl = (base: string) => base.trim().replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/chat/completions";
 async function chat(base: string, key: string, body: any, f: typeof fetch, signal?: AbortSignal, onToken?: (s: string) => void) {
   let last = "";
   for (let a = 0; a < 4; a++) {
     let emitted = false;
     try {
       const payload = onToken ? { ...body, stream: true, stream_options: { include_usage: true } } : body;
-      const r = await f(base.replace(/\/+$/, "") + "/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body: JSON.stringify(payload), signal });
+      const r = await f(chatUrl(base), { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body: JSON.stringify(payload), signal });
       if (r.ok) {
         if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) return await readSSE(r.body, (s) => { emitted = true; onToken(s); });
         return await r.json() as any;
       }
-      last = `HTTP ${r.status}: ${(await r.text()).slice(0, 300)}`;
+      last = `HTTP ${r.status} from ${chatUrl(base).replace(/^(https?:\/\/[^/]+).*/, "$1")}: ${(await r.text()).slice(0, 300)}`;
       if (![408, 409, 425, 429, 500, 502, 503, 504].includes(r.status)) break;
     } catch (e: any) { if (signal?.aborted) throw e; if (emitted) throw new Error("The connection dropped while the answer was streaming: " + (e.message || e)); last = e.message || String(e); }
     await new Promise((ok) => setTimeout(ok, 700 * (a + 1) ** 2));
