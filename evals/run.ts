@@ -51,7 +51,7 @@ for (const id of ids) {
   try { r = await runAgent({ root: w, task: t.prompt, base, key, model, mode, profile, ask: async () => false }); } catch (e: any) { err = e.message; }
   overlay(id, "hidden", w); const v = sh(t.verify, w);
   const row = { id, pass: v.ok, steps: r?.steps ?? 0, tokens: r?.tokens ?? 0, secs: Math.round((Date.now() - t0) / 1000), stopped: r?.stopped ?? "error", error: err, ranTests: !!r?.ranTests };
-  rows.push(row); console.log(`${row.pass ? "PASS" : "FAIL"} ${id}  steps=${row.steps} tokens=${row.tokens} ${row.secs}s ${row.stopped}${err ? " ERR " + err.slice(0, 120) : ""}`);
+  rows.push(row); console.log(`${row.pass ? "PASS" : "FAIL"} ${id}  steps=${row.steps} tokens=${row.tokens} ${row.secs}s ${row.stopped}${err ? " ERR " + err.slice(0, 400) : ""}`);
   if (!row.pass && !err) console.log("   why: " + (v.out.trim().split("\n").slice(-8).join(" | ").slice(-500)) + "\n   agent said: " + String(r?.summary || "").replace(/\s+/g, " ").slice(0, 300));
 }
 const passed = rows.filter((r) => r.pass).length;
