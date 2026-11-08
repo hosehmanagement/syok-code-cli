@@ -1,0 +1,39 @@
+name: build programs
+# Builds the single-file program for Windows, Mac and Linux. Run it from the Actions tab, or push a tag like v0.1.0.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [bun-linux-x64, bun-linux-arm64, bun-darwin-x64, bun-darwin-arm64, bun-windows-x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun test ./test
+      - name: Build
+        run: |
+          ext=""; if [[ "${{ matrix.target }}" == *windows* ]]; then ext=".exe"; fi
+          mkdir -p dist
+          bun build --compile --target=${{ matrix.target }} src/main.ts --outfile "dist/syok-${{ matrix.target }}$ext"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: syok-${{ matrix.target }}
+          path: dist/*
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
