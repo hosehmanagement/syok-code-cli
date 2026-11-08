@@ -1,11 +1,11 @@
-#name: score
+name: score
 # Runs the coding tasks against a model through your Syok AI key and saves a score.
 # Needs repository secrets SYOK_BASE_URL and SYOK_API_KEY (Settings > Secrets and variables > Actions).
 on:
   workflow_dispatch:
     inputs:
       model:
-        description: "Model or preset (for example syok-auto)"
+        description: "Model or preset: syok-auto or syok-coder"
         default: "syok-auto"
       profile:
         description: "Profile name from profiles.json (blank = automatic)"
