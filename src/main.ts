@@ -27,7 +27,7 @@ Coding modes (work in 30+ languages, and check their own work):
   syok test <file>                                write and run tests for a file
 Options:
   --cwd <folder>        project folder (default: current folder)
-  --model <name>        model or preset (default: syok-auto)
+  --model <name>        model or preset (default: syok-coder; syok-auto = general routing)
   --mode <ask|accept-edits|auto>   ask = ask before edits and commands (default)
                         accept-edits = edit freely, ask before other commands
                         auto = run everything except blocked commands
@@ -49,7 +49,7 @@ const cfg = readJson(join(homedir(), ".syok", "config.json"));
 const base = process.env.SYOK_BASE_URL || cfg.base || "", key = process.env.SYOK_API_KEY || cfg.key || "";
 if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok --help"); process.exit(2); }
 const root = resolve(arg("--cwd", process.cwd()));
-let model = arg("--model", "syok-auto"), mode = arg("--mode", "ask") as Mode;
+let model = arg("--model", "syok-coder"), mode = arg("--mode", "ask") as Mode;
 const table = existsSync(join(root, "profiles.json")) ? readJson(join(root, "profiles.json")) : {};
 const settings = readJson(join(root, ".syok", "settings.json"));
 const profile = pickProfile(model, arg("--profile") || undefined, table);
