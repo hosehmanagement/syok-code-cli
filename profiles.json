@@ -1,0 +1,5 @@
+{
+  "strict-edits": { "fuzzyEdit": false, "nudgeTests": true },
+  "no-nudge": { "nudgeTests": false },
+  "short-memory": { "compactAtChars": 30000, "keepRecent": 3, "maxToolChars": 5000 }
+}
