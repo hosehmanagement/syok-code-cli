@@ -2,7 +2,7 @@
 
 Syok Code for your own computer: an AI coding agent that reads your project, edits files, runs your tests and fixes what it broke. It talks to **your own Syok AI key**, so automatic key switching (when one provider hits a limit) keeps working in the middle of a long task.
 
-Status: early (v0.2). Built for computers that are fast and stable.
+Status: early (v0.3). Built for computers that are fast and stable.
 
 ## Quick start
 1. Download the program for your system from the Releases page (or Actions > build programs > artifacts).
@@ -41,6 +41,15 @@ Put a `SYOK.md`, `AGENTS.md` or `CLAUDE.md` in the project root and it is added 
   The command receives the event as JSON on its input. Exit code 2 blocks (or, for Stop, sends the message back to the AI).
 - **Local tool plug-ins (MCP)**: `{"mcpServers":{"mytools":{"command":"node","args":["server.js"]}}}`. Tools appear as `mcp__mytools__<tool>` and need your approval unless mode is auto or you list `"allow":["mcp__mytools"]`.
 - **Background jobs**: dev servers and watchers (`bg_start`, `bg_output`, `bg_stop`; `/jobs` lists them). They are stopped when Syok Code exits.
+
+## Coding modes (v0.3)
+Syok Code is specialised for programming. It knows how to check code in 30+ languages (JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Rust, PHP, Ruby, Swift, Kotlin, Scala, Dart, R, Lua, Perl, Bash, PowerShell, SQL, Haskell, Elixir, Julia, Zig, Objective-C, Fortran, OCaml, Clojure, Groovy, HTML, CSS) and uses the right compiler or syntax checker to prove its own output.
+- `syok gen "a function that checks a palindrome" --lang python`: plain words to working code, then it checks and runs it.
+- `syok translate utils.py --to go`: same behaviour in another language, written beside the original (which is never touched); it lists anything that cannot map exactly.
+- `syok debug "login fails"`: reproduces, finds the root cause, makes the smallest fix and proves it (never weakens a test).
+- `syok explain app.js`: plain-language explanation; read-only.
+- `syok test lib.rs`: writes and runs tests; a real bug is reported, not hidden.
+In chat the same modes are `/gen`, `/translate`, `/debug`, `/explain`, `/test`. Language notes for the project are detected from files like `go.mod`, `Cargo.toml`, `package.json` and added automatically. Pick a code-strong model with `--model` (for example a Qwen-Coder or DeepSeek-Coder name); open coder models get a tuned profile.
 
 ## Not yet
 Interactive terminals (programs that wait for typed input), a Windows-native shell (needs Git Bash or WSL for now), and a web bridge to the Syok app. See the plan in the Syok project notes.
