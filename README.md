@@ -27,7 +27,7 @@ Run one task and exit: `syok -p "fix the failing test" --mode accept-edits`
 Put a `SYOK.md`, `AGENTS.md` or `CLAUDE.md` in the project root and it is added to the instructions (first 8,000 characters).
 
 ## Making it better (scoring)
-`evals/` holds small coding tasks with hidden tests. `bun evals/run.ts --check` proves each task is fair. In GitHub, Actions > score runs a model on all tasks and saves a score. `profiles.json` holds tuning profiles per model; keep a change only if the score goes up.
+`evals/` holds 16 small coding tasks (JavaScript, Python, Go, Rust, Java, TypeScript) with hidden tests. `bun evals/run.ts --check` proves each task is fair. In GitHub, Actions > score runs a model on all tasks and saves a score. `profiles.json` holds tuning profiles per model; keep a change only if the score goes up.
 
 ## Develop
 `bun test ./test`. Single program: `bun build --compile src/main.ts --outfile syok`.
@@ -49,7 +49,7 @@ Syok Code is specialised for programming. It knows how to check code in 30+ lang
 - `syok debug "login fails"`: reproduces, finds the root cause, makes the smallest fix and proves it (never weakens a test).
 - `syok explain app.js`: plain-language explanation; read-only.
 - `syok test lib.rs`: writes and runs tests; a real bug is reported, not hidden.
-In chat the same modes are `/gen`, `/translate`, `/debug`, `/explain`, `/test`. Language notes for the project are detected from files like `go.mod`, `Cargo.toml`, `package.json` and added automatically. Pick a code-strong model with `--model` (for example a Qwen-Coder or DeepSeek-Coder name); open coder models get a tuned profile.
+In chat the same modes are `/gen`, `/translate`, `/debug`, `/explain`, `/test`. Language notes for the project are detected from files like `go.mod`, `Cargo.toml`, `package.json` and added automatically. By default it asks your Syok AI for the `syok-coder` preset, which tries your code-strong providers first (use `--model syok-auto` for normal routing). You can also pick a specific code-strong model with `--model` (for example a Qwen-Coder or DeepSeek-Coder name); open coder models get a tuned profile.
 
 ## Not yet
 Interactive terminals (programs that wait for typed input), a Windows-native shell (needs Git Bash or WSL for now), and a web bridge to the Syok app. See the plan in the Syok project notes.
