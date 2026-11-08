@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { runAgent, compact, loadInstructions } from "../src/agent.ts";
+import { runAgent, compact, loadInstructions, chatUrl } from "../src/agent.ts";
 import { DEFAULT, pickProfile } from "../src/profiles.ts";
 import { tmpProject, fakeAI, call } from "./helpers.ts";
 
@@ -87,4 +87,7 @@ test("multi-turn history keeps earlier messages", async () => {
   const r1 = await runAgent({ root: d, task: "one", base, key: "k", fetchImpl: ai.f });
   await runAgent({ root: d, task: "two", base, key: "k", fetchImpl: ai.f, history: r1.messages });
   expect(ai.seen[1].messages.map((m: any) => m.content).join("|")).toContain("one");
+});
+test("your address works with or without /v1 and a trailing slash", () => {
+  for (const b of ["https://p.example", "https://p.example/", "https://p.example/v1", "https://p.example/v1/", " https://p.example/v1 "]) expect(chatUrl(b)).toBe("https://p.example/v1/chat/completions");
 });
