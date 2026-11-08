@@ -10,7 +10,7 @@ def task(id, prompt, files, hidden, solution, verify):
     T[id] = dict(prompt=prompt, files=files, hidden=hidden, solution=solution, verify=verify)
 
 task("js-pagination-off-by-one",
- "Users report that paginate() in lib/paginate.js returns the wrong items: page 1 should be the first page. Fix the bug. Run the tests to check.",
+ "Users report that paginate() in lib/paginate.js returns the wrong items: page 1 should be the first page, and a page number below 1 counts as page 1. Fix the bug. Run the tests to check.",
  {"package.json": '{"type":"commonjs"}',
   "lib/paginate.js": "function paginate(items, page, size) {\n  const start = page * size;\n  return items.slice(start, start + size);\n}\nmodule.exports = { paginate };\n",
   "test/paginate.test.js": "const test = require('node:test'); const assert = require('node:assert');\nconst { paginate } = require('../lib/paginate');\ntest('first page', () => assert.deepStrictEqual(paginate([1,2,3,4,5], 1, 2), [1,2]));\n"},
