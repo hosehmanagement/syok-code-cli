@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { TOOLS, makeCtx, runTool, undoAll, type Ctx } from "./tools.ts";
+import { toolDefs, makeCtx, runTool, undoAll, READONLY, type Ctx } from "./tools.ts";
+import { runHooks } from "./hooks.ts";
+import { startMcp } from "./mcp.ts";
 import { pickProfile, type Profile } from "./profiles.ts";
 import type { Mode, Asker, Settings } from "./perm.ts";
 
@@ -12,13 +14,16 @@ Rules:
 4. After changing code, run the project's tests or build with run_command and fix failures you caused. If there are no tests, run a quick check or say so.
 5. Never write secrets, tokens or keys into files. Do not touch .git, .env or .github/workflows.
 6. If a tool says it was blocked or the user said no, do not try to get around it; explain and continue another way or finish.
-7. When finished, call finish with a short plain summary of what you changed and what you checked. If the task is impossible or unsafe, call finish and explain why.`;
+7. For big searches or reading many files, use delegate with role explorer so your own memory stays small; several explorers can run at once. Use a worker only for one self-contained change.
+8. Use bg_start for servers or watchers that keep running; never start them with run_command.
+9. When finished, call finish with a short plain summary of what you changed and what you checked. If the task is impossible or unsafe, call finish and explain why.`;
 
 export interface Msg { role: string; content?: any; tool_calls?: any[]; tool_call_id?: string; name?: string }
 export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean }
 export interface Opts {
   root: string; task: string; base: string; key: string; model?: string; mode?: Mode; ask?: Asker; settings?: Settings;
   profile?: Profile; fetchImpl?: typeof fetch; log?: (s: string) => void; ctx?: Ctx; history?: Msg[]; signal?: AbortSignal;
+  onToken?: (s: string) => void; system?: string;
 }
 export function loadInstructions(root: string): string {
   for (const f of ["SYOK.md", "AGENTS.md", "CLAUDE.md"]) {
@@ -39,56 +44,133 @@ export function compact(messages: Msg[], p: Profile): number {
   }
   return n;
 }
-async function chat(base: string, key: string, body: any, f: typeof fetch, signal?: AbortSignal) {
+const EXPLORER = `You are a read-only research helper for Syok Code. Answer the question you were given using list_files, read_file, search and find_files. Change nothing. When done call finish with a compact answer: exact file paths with line numbers and the facts needed, no padding.`;
+const WORKER = `You are a focused helper for Syok Code. Do only the sub-task you were given, with the smallest change, then run the relevant check and call finish with the files you changed and the result.`;
+async function readSSE(body: ReadableStream<Uint8Array>, on: (s: string) => void) {
+  const rd = body.getReader(), dec = new TextDecoder();
+  let buf = "", content = "", usage: any, streamed = false; const calls: any[] = [];
+  const handle = (line: string) => {
+    if (!line.startsWith("data:")) return;
+    const d = line.slice(5).trim(); if (!d || d === "[DONE]") return;
+    let j: any; try { j = JSON.parse(d); } catch { return; }
+    if (j.usage) usage = j.usage;
+    const dl = j.choices?.[0]?.delta; if (!dl) return;
+    if (typeof dl.content === "string" && dl.content) { content += dl.content; streamed = true; on(dl.content); }
+    for (const t of dl.tool_calls || []) {
+      const i = t.index ?? 0; const c = (calls[i] ??= { id: "", type: "function", function: { name: "", arguments: "" } });
+      if (t.id) c.id = t.id; if (t.function?.name && !c.function.name) c.function.name = t.function.name;
+      if (t.function?.arguments) c.function.arguments += t.function.arguments;
+    }
+  };
+  for (;;) {
+    const { done, value } = await rd.read(); if (done) break;
+    buf += dec.decode(value, { stream: true }); let i: number;
+    while ((i = buf.indexOf("\n")) >= 0) { handle(buf.slice(0, i).replace(/\r$/, "")); buf = buf.slice(i + 1); }
+  }
+  if (buf.trim()) handle(buf.trim());
+  const tc = calls.filter(Boolean).map((c, i) => ({ ...c, id: c.id || "call_" + i }));
+  return { choices: [{ message: { role: "assistant", content, ...(tc.length ? { tool_calls: tc } : {}) } }], usage, __streamed: streamed } as any;
+}
+async function chat(base: string, key: string, body: any, f: typeof fetch, signal?: AbortSignal, onToken?: (s: string) => void) {
   let last = "";
   for (let a = 0; a < 4; a++) {
+    let emitted = false;
     try {
-      const r = await f(base.replace(/\/+$/, "") + "/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body: JSON.stringify(body), signal });
-      if (r.ok) return await r.json() as any;
+      const payload = onToken ? { ...body, stream: true, stream_options: { include_usage: true } } : body;
+      const r = await f(base.replace(/\/+$/, "") + "/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body: JSON.stringify(payload), signal });
+      if (r.ok) {
+        if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) return await readSSE(r.body, (s) => { emitted = true; onToken(s); });
+        return await r.json() as any;
+      }
       last = `HTTP ${r.status}: ${(await r.text()).slice(0, 300)}`;
       if (![408, 409, 425, 429, 500, 502, 503, 504].includes(r.status)) break;
-    } catch (e: any) { if (signal?.aborted) throw e; last = e.message || String(e); }
+    } catch (e: any) { if (signal?.aborted) throw e; if (emitted) throw new Error("The connection dropped while the answer was streaming: " + (e.message || e)); last = e.message || String(e); }
     await new Promise((ok) => setTimeout(ok, 700 * (a + 1) ** 2));
   }
   throw new Error("The AI service failed: " + last);
 }
+const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n) + "\n...[cut]");
 export async function runAgent(o: Opts): Promise<Result> {
   const model = o.model || "syok-auto";
   const profile = o.profile || pickProfile(model);
   const ask: Asker = o.ask || (async () => false);
-  const ctx = o.ctx || makeCtx(o.root, o.mode || "ask", ask, o.settings || {}, profile);
+  const settings = o.settings || {};
+  const ownsCtx = !o.ctx;
+  const ctx = o.ctx || makeCtx(o.root, o.mode || "ask", ask, settings, profile);
   const log = o.log || (() => {});
-  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: SYSTEM + loadInstructions(ctx.root) + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
+  if (ownsCtx && settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, ctx.root, log);
+  try { return await loop(o, ctx, model, profile, log); }
+  finally { if (ownsCtx) { ctx.bg.stopAll(); ctx.mcp.forEach((m) => m.stop()); } }
+}
+async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s: string) => void): Promise<Result> {
+  const hooks = ctx.settings.hooks || {};
+  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || SYSTEM) + loadInstructions(ctx.root) + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
   messages.push({ role: "user", content: o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.` });
   const f = o.fetchImpl || fetch;
-  let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "";
+  let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0;
+  const sub = async (task: string, role: string): Promise<string> => {
+    const explorer = role !== "worker";
+    const child: Ctx = { ...ctx, depth: ctx.depth + 1, allowed: explorer ? READONLY : undefined };
+    const r = await runAgent({ root: ctx.root, task, base: o.base, key: o.key, model, mode: ctx.mode, ask: ctx.ask, settings: ctx.settings, profile: { ...profile, maxSteps: Math.min(profile.maxSteps, 20) }, fetchImpl: f, log: (s) => log("  [" + role + "] " + s), ctx: child, system: explorer ? EXPLORER : WORKER, signal: o.signal });
+    tokens += r.tokens;
+    return clip(`(${role} finished in ${r.steps} steps, ${r.stopped})\n${r.summary}`, 6000);
+  };
+  const stopGate = async (): Promise<boolean> => {
+    if (ctx.depth > 0 || !hooks.Stop?.length || stopTries >= 2) return false;
+    const h = await runHooks(hooks.Stop, "Stop", { cwd: ctx.root, touched: [...ctx.touched] }, ctx.root);
+    if (!h.block) { if (h.message) log("[hook] " + h.message); return false; }
+    stopTries++; messages.push({ role: "user", content: "A Stop hook says the work is not done yet:\n" + h.message + "\nFix this, then finish again." }); log("[hook blocked finishing] " + h.message); return true;
+  };
   while (steps < profile.maxSteps) {
     steps++;
     if (compact(messages, profile)) log("(older tool output shortened to save room)");
-    const res = await chat(o.base, o.key, { model, messages, tools: TOOLS, tool_choice: "auto", temperature: profile.temperature }, f, o.signal);
+    const res = await chat(o.base, o.key, { model, messages, tools: toolDefs(ctx), tool_choice: "auto", temperature: profile.temperature }, f, o.signal, o.onToken);
     tokens += res.usage?.total_tokens || 0;
     const msg = res.choices?.[0]?.message;
     if (!msg) throw new Error("The AI service returned no message.");
     messages.push({ role: "assistant", content: msg.content ?? "", ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls } : {}) });
-    if (msg.content) log(String(msg.content));
+    if (res.__streamed) o.onToken?.("\n"); else if (msg.content) log(String(msg.content));
     const calls = msg.tool_calls || [];
     if (!calls.length) {
       if (profile.nudgeTests && !nudged && ctx.touched.size && !ctx.ran.tests) { nudged = true; messages.push({ role: "user", content: "You changed files but have not run any tests or checks. Run them now, or call finish and say why you could not." }); continue; }
+      if (await stopGate()) continue;
       summary = String(msg.content || "(no summary)"); stopped = "answered"; break;
     }
+    // explorers in the same message run side by side (up to 4); everything else runs in order
+    const parsed = calls.map((tc: any) => { let args: any = null; try { args = JSON.parse(tc.function?.arguments || "{}"); } catch {} return args; });
+    const early = new Map<number, Promise<string>>();
+    if (ctx.depth === 0) calls.forEach((tc: any, i: number) => { const a = parsed[i]; if (tc.function?.name === "delegate" && a && (a.role || "explorer") === "explorer" && early.size < 4) early.set(i, sub(String(a.task || ""), "explorer").catch((e) => "Error: " + e.message)); });
     let finished = false;
-    for (const tc of calls) {
-      const name = tc.function?.name; let args: any = {};
-      try { args = JSON.parse(tc.function?.arguments || "{}"); } catch { messages.push({ role: "tool", tool_call_id: tc.id, name, content: "Error: the tool arguments were not valid JSON. Send the call again with valid JSON." }); continue; }
-      if (name === "finish") { summary = String(args.summary || ""); stopped = "finished"; finished = true; messages.push({ role: "tool", tool_call_id: tc.id, name, content: "ok" }); break; }
+    for (let i = 0; i < calls.length; i++) {
+      const tc = calls[i]; const name = tc.function?.name; const args = parsed[i];
+      if (args === null) { messages.push({ role: "tool", tool_call_id: tc.id, name, content: "Error: the tool arguments were not valid JSON. Send the call again with valid JSON." }); continue; }
+      if (name === "finish") {
+        messages.push({ role: "tool", tool_call_id: tc.id, name, content: "ok" });
+        if (await stopGate()) { for (let j = i + 1; j < calls.length; j++) messages.push({ role: "tool", tool_call_id: calls[j].id, name: calls[j].function?.name, content: "skipped" }); break; }
+        summary = String(args.summary || ""); stopped = "finished"; finished = true; break;
+      }
       const sig = name + JSON.stringify(args); repeats = sig === lastSig ? repeats + 1 : 0; lastSig = sig;
       let out: string;
       if (repeats >= 5) { stopped = "stuck"; summary = "Stopped: the AI kept repeating the same step."; finished = true; out = "stopped"; }
       else if (repeats >= 2) out = "You have made this exact call several times with the same result. Try a different approach.";
-      else { log(`> ${name} ${JSON.stringify(args).slice(0, 140)}`); out = await runTool(ctx, name, args); }
+      else if (name === "delegate") {
+        if (ctx.depth > 0) out = "Error: helpers cannot delegate further.";
+        else { log(`> delegate ${JSON.stringify(args).slice(0, 140)}`); out = await (early.get(i) ?? sub(String(args.task || ""), args.role === "worker" ? "worker" : "explorer").catch((e) => "Error: " + e.message)); }
+      } else {
+        log(`> ${name} ${JSON.stringify(args).slice(0, 140)}`);
+        const pre = await runHooks(hooks.PreToolUse, "PreToolUse", { tool: name, args, cwd: ctx.root }, ctx.root, name);
+        if (pre.block) out = "Blocked by a hook: " + (pre.message || "no reason given");
+        else {
+          out = await runTool(ctx, name, args);
+          const post = await runHooks(hooks.PostToolUse, "PostToolUse", { tool: name, args, result: out.slice(0, 2000), cwd: ctx.root }, ctx.root, name);
+          if (post.message) out += "\n[hook] " + post.message;
+        }
+      }
       messages.push({ role: "tool", tool_call_id: tc.id, name, content: out });
       if (finished) break;
     }
+    // any explorers we started but never reached must still finish before we move on
+    await Promise.allSettled([...early.values()]);
     if (finished) break;
   }
   if (!stopped) { stopped = "max_steps"; summary = `Stopped after ${profile.maxSteps} steps without finishing.`; }
