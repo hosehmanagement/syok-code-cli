@@ -1,0 +1,45 @@
+name: score
+# Runs the coding tasks against a model through your Syok AI key and saves a score.
+# Needs repository secrets SYOK_BASE_URL and SYOK_API_KEY (Settings > Secrets and variables > Actions).
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model or preset (for example syok-auto)"
+        default: "syok-auto"
+      profile:
+        description: "Profile name from profiles.json (blank = automatic)"
+        default: ""
+      tasks:
+        description: "Task name prefixes, comma separated (blank = all)"
+        default: ""
+      max_steps:
+        description: "Step limit per task"
+        default: "40"
+permissions:
+  contents: read
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Run tasks
+        env:
+          SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+          MODEL: ${{ inputs.model }}
+          PROFILE: ${{ inputs.profile }}
+          TASKS: ${{ inputs.tasks }}
+          STEPS: ${{ inputs.max_steps }}
+        run: |
+          args=(--model "$MODEL" --max-steps "$STEPS")
+          if [ -n "$PROFILE" ]; then args+=(--profile "$PROFILE"); fi
+          if [ -n "$TASKS" ]; then args+=(--tasks "$TASKS"); fi
+          bun evals/run.ts "${args[@]}" | tee score.txt
+          echo '```' >> "$GITHUB_STEP_SUMMARY"; cat score.txt >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: score-results
+          path: evals/results/
