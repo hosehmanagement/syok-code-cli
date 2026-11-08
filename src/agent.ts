@@ -85,7 +85,9 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
         if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) return await readSSE(r.body, (s) => { emitted = true; onToken(s); });
         return await r.json() as any;
       }
-      last = `HTTP ${r.status} from ${chatUrl(base).replace(/^(https?:\/\/[^/]+).*/, "$1")}: ${(await r.text()).slice(0, 300)}`;
+      const bodyText = (await r.text()).slice(0, 300);
+      last = `HTTP ${r.status} from ${chatUrl(base).replace(/^(https?:\/\/[^/]+).*/, "$1")}: ${bodyText}`;
+      if (/daily_limit_reached/.test(bodyText)) { last = "This Syok key reached its daily limit (it resets at midnight UTC; you can raise the limit in Syok > Developer API). " + last; break; }
       if (![408, 409, 425, 429, 500, 502, 503, 504].includes(r.status)) break;
       const ra = Number(r.headers.get("retry-after")); if (ra > 0) wait = Math.min(30000, Math.max(wait, ra * 1000));
     } catch (e: any) { if (signal?.aborted) throw e; if (emitted) throw new Error("The connection dropped while the answer was streaming: " + (e.message || e)); last = e.message || String(e); }
