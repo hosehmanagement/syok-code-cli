@@ -1,4 +1,4 @@
-name: score
+#name: score
 # Runs the coding tasks against a model through your Syok AI key and saves a score.
 # Needs repository secrets SYOK_BASE_URL and SYOK_API_KEY (Settings > Secrets and variables > Actions).
 on:
