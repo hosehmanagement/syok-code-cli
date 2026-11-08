@@ -76,8 +76,8 @@ async function readSSE(body: ReadableStream<Uint8Array>, on: (s: string) => void
 export const chatUrl = (base: string) => base.trim().replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/chat/completions";
 async function chat(base: string, key: string, body: any, f: typeof fetch, signal?: AbortSignal, onToken?: (s: string) => void) {
   let last = "";
-  for (let a = 0; a < 4; a++) {
-    let emitted = false;
+  for (let a = 0; a < 6; a++) {
+    let emitted = false; let wait = [700, 2800, 6000, 12000, 20000][a] ?? 0;
     try {
       const payload = onToken ? { ...body, stream: true, stream_options: { include_usage: true } } : body;
       const r = await f(chatUrl(base), { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body: JSON.stringify(payload), signal });
@@ -87,8 +87,9 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
       }
       last = `HTTP ${r.status} from ${chatUrl(base).replace(/^(https?:\/\/[^/]+).*/, "$1")}: ${(await r.text()).slice(0, 300)}`;
       if (![408, 409, 425, 429, 500, 502, 503, 504].includes(r.status)) break;
+      const ra = Number(r.headers.get("retry-after")); if (ra > 0) wait = Math.min(30000, Math.max(wait, ra * 1000));
     } catch (e: any) { if (signal?.aborted) throw e; if (emitted) throw new Error("The connection dropped while the answer was streaming: " + (e.message || e)); last = e.message || String(e); }
-    await new Promise((ok) => setTimeout(ok, 700 * (a + 1) ** 2));
+    if (a < 5) await new Promise((ok) => setTimeout(ok, wait));
   }
   throw new Error("The AI service failed: " + last);
 }
