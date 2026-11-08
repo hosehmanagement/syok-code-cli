@@ -92,7 +92,7 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
 }
 const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n) + "\n...[cut]");
 export async function runAgent(o: Opts): Promise<Result> {
-  const model = o.model || "syok-auto";
+  const model = o.model || "syok-coder";
   const profile = o.profile || pickProfile(model);
   const ask: Asker = o.ask || (async () => false);
   const settings = o.settings || {};
