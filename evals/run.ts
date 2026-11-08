@@ -52,6 +52,7 @@ for (const id of ids) {
   overlay(id, "hidden", w); const v = sh(t.verify, w);
   const row = { id, pass: v.ok, steps: r?.steps ?? 0, tokens: r?.tokens ?? 0, secs: Math.round((Date.now() - t0) / 1000), stopped: r?.stopped ?? "error", error: err, ranTests: !!r?.ranTests };
   rows.push(row); console.log(`${row.pass ? "PASS" : "FAIL"} ${id}  steps=${row.steps} tokens=${row.tokens} ${row.secs}s ${row.stopped}${err ? " ERR " + err.slice(0, 120) : ""}`);
+  if (!row.pass && !err) console.log("   why: " + (v.out.trim().split("\n").slice(-8).join(" | ").slice(-500)) + "\n   agent said: " + String(r?.summary || "").replace(/\s+/g, " ").slice(0, 300));
 }
 const passed = rows.filter((r) => r.pass).length;
 const summary = { model, profile: profile.name, profileSettings: profile, passed, total: rows.length, rate: +(passed / Math.max(1, rows.length)).toFixed(3), steps: rows.reduce((n, r) => n + r.steps, 0), tokens: rows.reduce((n, r) => n + r.tokens, 0), rows };
