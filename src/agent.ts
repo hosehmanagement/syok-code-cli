@@ -3,10 +3,11 @@ import { join } from "node:path";
 import { toolDefs, makeCtx, runTool, undoAll, READONLY, type Ctx } from "./tools.ts";
 import { runHooks } from "./hooks.ts";
 import { startMcp } from "./mcp.ts";
+import { langContext } from "./langs.ts";
 import { pickProfile, type Profile } from "./profiles.ts";
 import type { Mode, Asker, Settings } from "./perm.ts";
 
-export const SYSTEM = `You are Syok Code, a careful senior software engineer working in the user's project folder on their own computer. You act only through the tools.
+export const SYSTEM = `You are Syok Code, a careful senior software engineer working in the user's project folder on their own computer. You act only through the tools. You are specialised for programming: writing code from plain-language descriptions in any language, debugging, translating code between languages, explaining code and writing tests. If asked for something unrelated to programming, say briefly that you only help with code and stop.
 Rules:
 1. Explore first (list_files, search, find_files, read_file). Never guess file contents.
 2. Make the smallest change that fully solves the task. Match the existing style. Do not reformat unrelated code.
@@ -104,7 +105,7 @@ export async function runAgent(o: Opts): Promise<Result> {
 }
 async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s: string) => void): Promise<Result> {
   const hooks = ctx.settings.hooks || {};
-  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || SYSTEM) + loadInstructions(ctx.root) + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
+  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || SYSTEM) + loadInstructions(ctx.root) + (ctx.depth === 0 ? langContext(ctx.root) : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
   messages.push({ role: "user", content: o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.` });
   const f = o.fetchImpl || fetch;
   let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0;
