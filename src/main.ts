@@ -7,6 +7,8 @@ import { runAgent, makeCtx, undoAll, type Msg } from "./agent.ts";
 import { sessionDiff } from "./tools.ts";
 import { colorize } from "./diff.ts";
 import { startMcp } from "./mcp.ts";
+import { buildTask, KINDS, type Kind } from "./tasks.ts";
+import { READONLY } from "./tools.ts";
 import { pickProfile } from "./profiles.ts";
 import type { Mode } from "./perm.ts";
 
@@ -17,6 +19,12 @@ const HELP = `Syok Code (command line)
 Usage:
   syok                       chat in the current folder
   syok -p "fix the failing test"   run one task and print the result
+Coding modes (work in 30+ languages, and check their own work):
+  syok gen "a function that checks a palindrome" --lang python [--out file]   plain words -> working code
+  syok translate utils.py --to go                 same behaviour in another language (new file beside the old one)
+  syok debug ["what is wrong"]                    reproduce, find the cause, fix, prove it
+  syok explain <file>                             plain-language explanation (read-only)
+  syok test <file>                                write and run tests for a file
 Options:
   --cwd <folder>        project folder (default: current folder)
   --model <name>        model or preset (default: syok-auto)
@@ -29,7 +37,7 @@ Options:
   --json                print the result as JSON (for tests and scripts)
 Setup: set SYOK_BASE_URL (your Syok address) and SYOK_API_KEY (a syk_ key from Syok > Developer API),
 or put {"base":"...","key":"..."} in ~/.syok/config.json.
-In chat: /diff (show every change so far)  /undo  /mode <m>  /model <m>  /jobs  /help  /exit
+In chat: /gen /translate /debug /explain /test (same as above)  /diff (show every change so far)  /undo  /mode <m>  /model <m>  /jobs  /help  /exit
 Extras (in <project>/.syok/settings.json):
   "hooks": { "PreToolUse": [{"match":"edit_file|write_file","command":"./check.sh"}], "PostToolUse": [...], "Stop": [{"command":"npm test"}] }
       your command gets the event as JSON on its input; exit code 2 blocks the action (or sends the message back to the AI for Stop)
@@ -58,8 +66,25 @@ if (settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, root, (s)
 const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); };
 process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exit(130); });
 const onToken = !has("--json") && !has("--no-stream") ? (s: string) => process.stdout.write(s) : undefined;
-const prompt = arg("-p");
+const VALUE_FLAGS = new Set(["--lang", "--to", "--out", "--cwd", "--model", "--mode", "--profile", "--max-steps", "-p"]);
+function words(s: string) { return (s.match(/"[^"]*"|'[^']*'|\S+/g) || []).map((w) => w.replace(/^(["'])(.*)\1$/, "$2")); }
+function modeTask(kind: Kind, toks: string[]) {
+  const pos: string[] = []; const f: Record<string, string> = {};
+  for (let i = 0; i < toks.length; i++) { if (VALUE_FLAGS.has(toks[i])) { f[toks[i]] = toks[++i] || ""; } else if (!toks[i].startsWith("--")) pos.push(toks[i]); }
+  const a = kind === "gen" || kind === "debug" ? { text: pos.join(" "), lang: f["--lang"], out: f["--out"] }
+    : { file: pos[0], text: pos.slice(1).join(" ") || (kind === "explain" ? pos.join(" ") : ""), to: f["--to"] || pos[1], lang: f["--lang"], out: f["--out"] };
+  if (kind === "explain" && pos.length > 1) { a.file = existsSync(join(root, pos[0])) ? pos[0] : undefined; a.text = a.file ? "" : pos.join(" "); }
+  return buildTask(kind, a);
+}
+const sub = process.argv[2] as Kind;
+let prompt = arg("-p"), readOnlyRun = false;
+if (KINDS.includes(sub)) {
+  const b = modeTask(sub, process.argv.slice(3));
+  if (b.error) { console.error(b.error); process.exit(2); }
+  prompt = b.task; readOnlyRun = b.readOnly;
+}
 if (prompt) {
+  if (readOnlyRun) ctx.allowed = READONLY;
   const r = await runAgent({ root, task: prompt, base, key, model, mode, ask, settings, profile, ctx, log, onToken });
   if (has("--json")) console.log(JSON.stringify({ summary: r.summary, steps: r.steps, tokens: r.tokens, touched: r.touched, stopped: r.stopped, ranTests: r.ranTests }));
   else console.log("\n" + r.summary + `\n(${r.steps} steps, ${r.tokens} tokens, files changed: ${r.touched.join(", ") || "none"})`);
@@ -73,6 +98,15 @@ for (;;) {
   if (!line) continue;
   if (line === "/exit" || line === "/quit") break;
   if (line === "/help") { console.log(HELP); continue; }
+  const slash = /^\/(gen|translate|debug|explain|test)\b\s*(.*)$/.exec(line);
+  if (slash) {
+    const b = modeTask(slash[1] as Kind, words(slash[2]));
+    if (b.error) { console.log(b.error); continue; }
+    ctx.allowed = b.readOnly ? READONLY : undefined;
+    try { const r = await runAgent({ root, task: b.task, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken }); history = r.messages; console.log("\n" + r.summary + `\n(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"})`); }
+    catch (e: any) { console.log("Error: " + e.message); } finally { ctx.allowed = undefined; }
+    continue;
+  }
   if (line === "/diff") { const d = sessionDiff(ctx); console.log(d ? colorize(d) : "No changes yet."); continue; }
   if (line === "/jobs") { console.log(ctx.bg.list()); continue; }
   if (line === "/undo") { const d = undoAll(ctx); console.log(d.length ? "Restored: " + d.join(", ") : "Nothing to undo."); continue; }
