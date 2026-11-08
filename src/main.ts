@@ -4,6 +4,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { runAgent, makeCtx, undoAll, type Msg } from "./agent.ts";
+import { sessionDiff } from "./tools.ts";
+import { colorize } from "./diff.ts";
+import { startMcp } from "./mcp.ts";
 import { pickProfile } from "./profiles.ts";
 import type { Mode } from "./perm.ts";
 
@@ -22,10 +25,17 @@ Options:
                         auto = run everything except blocked commands
   --profile <name>      tuning profile from profiles.json
   --max-steps <n>       stop after n steps
+  --no-stream           wait for the full answer instead of showing it as it is written
   --json                print the result as JSON (for tests and scripts)
 Setup: set SYOK_BASE_URL (your Syok address) and SYOK_API_KEY (a syk_ key from Syok > Developer API),
 or put {"base":"...","key":"..."} in ~/.syok/config.json.
-In chat: /undo  /mode <m>  /model <m>  /help  /exit`;
+In chat: /diff (show every change so far)  /undo  /mode <m>  /model <m>  /jobs  /help  /exit
+Extras (in <project>/.syok/settings.json):
+  "hooks": { "PreToolUse": [{"match":"edit_file|write_file","command":"./check.sh"}], "PostToolUse": [...], "Stop": [{"command":"npm test"}] }
+      your command gets the event as JSON on its input; exit code 2 blocks the action (or sends the message back to the AI for Stop)
+  "mcpServers": { "name": { "command": "node", "args": ["server.js"] } }   local tool servers (MCP over stdio)
+  "allow": ["npm run"], "deny": ["curl"]    command prefixes to always allow / block
+The AI can also delegate to helper agents (read-only explorers run in parallel) and run background jobs (dev servers).`;
 if (has("--help") || has("-h")) { console.log(HELP); process.exit(0); }
 const cfg = readJson(join(homedir(), ".syok", "config.json"));
 const base = process.env.SYOK_BASE_URL || cfg.base || "", key = process.env.SYOK_API_KEY || cfg.key || "";
@@ -39,14 +49,18 @@ if (arg("--max-steps")) profile.maxSteps = +arg("--max-steps");
 const rl = process.stdin.isTTY ? createInterface({ input: process.stdin, output: process.stdout }) : null;
 const ask = async (what: string, detail: string) => {
   if (!rl) return false;
-  const a = (await rl.question(`\nAllow ${what}?\n${detail.slice(0, 500)}\n[y/N] `)).trim().toLowerCase();
+  const a = (await rl.question(`\nAllow ${what}?\n${process.stdout.isTTY ? colorize(detail.slice(0, 1800)) : detail.slice(0, 1800)}\n[y/N] `)).trim().toLowerCase();
   return a === "y" || a === "yes";
 };
 const log = (s: string) => { if (!has("--json")) console.log(s); };
 const ctx = makeCtx(root, mode, ask, settings, profile);
+if (settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, root, (s) => console.error(s));
+const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); };
+process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exit(130); });
+const onToken = !has("--json") && !has("--no-stream") ? (s: string) => process.stdout.write(s) : undefined;
 const prompt = arg("-p");
 if (prompt) {
-  const r = await runAgent({ root, task: prompt, base, key, model, mode, ask, settings, profile, ctx, log });
+  const r = await runAgent({ root, task: prompt, base, key, model, mode, ask, settings, profile, ctx, log, onToken });
   if (has("--json")) console.log(JSON.stringify({ summary: r.summary, steps: r.steps, tokens: r.tokens, touched: r.touched, stopped: r.stopped, ranTests: r.ranTests }));
   else console.log("\n" + r.summary + `\n(${r.steps} steps, ${r.tokens} tokens, files changed: ${r.touched.join(", ") || "none"})`);
   rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1);
@@ -59,11 +73,13 @@ for (;;) {
   if (!line) continue;
   if (line === "/exit" || line === "/quit") break;
   if (line === "/help") { console.log(HELP); continue; }
+  if (line === "/diff") { const d = sessionDiff(ctx); console.log(d ? colorize(d) : "No changes yet."); continue; }
+  if (line === "/jobs") { console.log(ctx.bg.list()); continue; }
   if (line === "/undo") { const d = undoAll(ctx); console.log(d.length ? "Restored: " + d.join(", ") : "Nothing to undo."); continue; }
   if (line.startsWith("/mode ")) { mode = line.slice(6).trim() as Mode; ctx.mode = mode; console.log("Mode: " + mode); continue; }
   if (line.startsWith("/model ")) { model = line.slice(7).trim(); console.log("Model: " + model); continue; }
   try {
-    const r = await runAgent({ root, task: line, base, key, model, mode, ask, settings, profile, ctx, log, history });
+    const r = await runAgent({ root, task: line, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken });
     history = r.messages; console.log("\n" + r.summary + `\n(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"})`);
   } catch (e: any) { console.log("Error: " + e.message); }
 }
