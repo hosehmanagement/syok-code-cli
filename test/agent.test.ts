@@ -91,3 +91,8 @@ test("multi-turn history keeps earlier messages", async () => {
 test("your address works with or without /v1 and a trailing slash", () => {
   for (const b of ["https://p.example", "https://p.example/", "https://p.example/v1", "https://p.example/v1/", " https://p.example/v1 "]) expect(chatUrl(b)).toBe("https://p.example/v1/chat/completions");
 });
+test("a daily-limit reply stops at once instead of retrying", async () => {
+  let n = 0; const f = (async () => { n++; return new Response('{"error":{"code":"daily_limit_reached","message":"This key reached its daily limit (500 requests)."}}', { status: 429 }); }) as any;
+  await expect(runAgent({ root: tmpProject({}), task: "t", base, key: "k", fetchImpl: f })).rejects.toThrow(/daily limit/);
+  expect(n).toBe(1);
+});
