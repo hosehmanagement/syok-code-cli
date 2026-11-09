@@ -121,3 +121,20 @@ test("explains a throttle that never clears", async () => {
   expect(ai.seen.length).toBe(4);
   retryTiming.throttleWaitMs = 45_000; retryTiming.throttleAttempts = 10;
 });
+
+test("a tool call the model wrote as JSON text is run as a real tool call", async () => {
+  const d = tmpProject({ "a.txt": "hello" });
+  const ai = fakeAI([
+    { role: "assistant", content: '{"type": "function", "name": "read_file", "parameters": {"path": "a.txt"}}' },
+    { role: "assistant", content: "done" },
+  ]);
+  const r = await runAgent({ root: d, task: "t", base, key: "k", fetchImpl: ai.f });
+  expect(r.stopped).toBe("answered"); expect(ai.seen.length).toBe(2);
+  const toolMsg = ai.seen[1].messages.find((m: any) => m.role === "tool");
+  expect(toolMsg?.content).toContain("hello");
+});
+test("ordinary JSON answers are not mistaken for tool calls", async () => {
+  const ai = fakeAI([{ role: "assistant", content: '{"result": 42, "note": "all good"}' }]);
+  const r = await runAgent({ root: tmpProject({}), task: "t", base, key: "k", fetchImpl: ai.f });
+  expect(r.stopped).toBe("answered"); expect(ai.seen.length).toBe(1);
+});
