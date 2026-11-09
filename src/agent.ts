@@ -83,10 +83,15 @@ export const briefBody = (raw: string): string => {
 
 /** Your Syok address, with or without a trailing slash or /v1 (the Developer API page shows it with /v1). */
 export const chatUrl = (base: string) => base.trim().replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/chat/completions";
-async function chat(base: string, key: string, body: any, f: typeof fetch, signal?: AbortSignal, onToken?: (s: string) => void) {
-  let last = "";
-  for (let a = 0; a < 6; a++) {
-    let emitted = false; let wait = [700, 2800, 6000, 12000, 20000][a] ?? 0;
+/** How long to wait when the Syok worker itself is throttled by Cloudflare (Workers Free plan: 10 ms of CPU per request). Such a throttle lasts a few minutes, so wait patiently instead of giving up. Tests shorten these. */
+export const retryTiming = { throttleWaitMs: 45_000, throttleAttempts: 10 };
+const isThrottled = (status: number, body: string) => status === 503 && /exceeded resource limits|error code 1102/i.test(body);
+const THROTTLE_NOTE = "Your Syok worker is being throttled by Cloudflare (the Workers Free plan allows 10 ms of CPU per request). ";
+async function chat(base: string, key: string, body: any, f: typeof fetch, signal?: AbortSignal, onToken?: (s: string) => void, note?: (s: string) => void) {
+  let last = ""; let normal = 0, throttled = 0;
+  const host = chatUrl(base).replace(/^(https?:\/\/[^/]+).*/, "$1");
+  while (true) {
+    let emitted = false; let wait = 0;
     try {
       const payload = onToken ? { ...body, stream: true, stream_options: { include_usage: true } } : body;
       const r = await f(chatUrl(base), { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body: JSON.stringify(payload), signal });
@@ -95,12 +100,25 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
         return await r.json() as any;
       }
       const bodyText = briefBody(await r.text());
-      last = `HTTP ${r.status} from ${chatUrl(base).replace(/^(https?:\/\/[^/]+).*/, "$1")}: ${bodyText}`;
+      last = `HTTP ${r.status} from ${host}: ${bodyText}`;
       if (/daily_limit_reached/.test(bodyText)) { last = "This Syok key reached its daily limit (it resets at midnight UTC; you can raise the limit in Syok > Developer API). " + last; break; }
-      if (![408, 409, 425, 429, 500, 502, 503, 504].includes(r.status)) break;
-      const ra = Number(r.headers.get("retry-after")); if (ra > 0) wait = Math.min(30000, Math.max(wait, ra * 1000));
-    } catch (e: any) { if (signal?.aborted) throw e; if (emitted) throw new Error("The connection dropped while the answer was streaming: " + (e.message || e)); last = e.message || String(e); }
-    if (a < 5) await new Promise((ok) => setTimeout(ok, wait));
+      if (isThrottled(r.status, bodyText)) {
+        if (++throttled > retryTiming.throttleAttempts) { last = THROTTLE_NOTE + "It stayed throttled for too long. Try again in a few minutes, or move that Cloudflare account to the Workers Paid plan. " + last; break; }
+        wait = retryTiming.throttleWaitMs;
+        note?.(THROTTLE_NOTE + `Waiting ${Math.round(wait / 1000)} s and trying again (${throttled}/${retryTiming.throttleAttempts})...`);
+      } else if ([408, 409, 425, 429, 500, 502, 503, 504].includes(r.status)) {
+        if (++normal >= 6) break;
+        wait = [700, 2800, 6000, 12000, 20000][normal - 1] ?? 20000;
+        const ra = Number(r.headers.get("retry-after")); if (ra > 0) wait = Math.min(30000, Math.max(wait, ra * 1000));
+      } else break;
+    } catch (e: any) {
+      if (signal?.aborted) throw e;
+      if (emitted) throw new Error("The connection dropped while the answer was streaming: " + (e.message || e));
+      last = e.message || String(e);
+      if (++normal >= 6) break;
+      wait = [700, 2800, 6000, 12000, 20000][normal - 1] ?? 20000;
+    }
+    await new Promise((ok) => setTimeout(ok, wait));
   }
   throw new Error("The AI service failed: " + last);
 }
@@ -139,7 +157,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
   while (steps < profile.maxSteps) {
     steps++;
     if (compact(messages, profile)) log("(older tool output shortened to save room)");
-    const res = await chat(o.base, o.key, { model, messages, tools: toolDefs(ctx), tool_choice: "auto", temperature: profile.temperature }, f, o.signal, o.onToken);
+    const res = await chat(o.base, o.key, { model, messages, tools: toolDefs(ctx), tool_choice: "auto", temperature: profile.temperature }, f, o.signal, o.onToken, log);
     tokens += res.usage?.total_tokens || 0;
     const msg = res.choices?.[0]?.message;
     if (!msg) throw new Error("The AI service returned no message.");
