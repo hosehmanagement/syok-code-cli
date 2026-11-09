@@ -72,6 +72,15 @@ async function readSSE(body: ReadableStream<Uint8Array>, on: (s: string) => void
   const tc = calls.filter(Boolean).map((c, i) => ({ ...c, id: c.id || "call_" + i }));
   return { choices: [{ message: { role: "assistant", content, ...(tc.length ? { tool_calls: tc } : {}) } }], usage, __streamed: streamed } as any;
 }
+/** Shrinks a long HTML error page (for example Cloudflare's) to its title and error code so messages stay readable. */
+export const briefBody = (raw: string): string => {
+  if (!/^\s*<(!doctype|html)/i.test(raw)) return raw.slice(0, 300);
+  const title = (raw.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || "").replace(/\s+/g, " ").trim();
+  const code = raw.match(/Error code:?\s*(\d{3,4})/i)?.[1] || raw.match(/\bError (1\d{3})\b/)?.[1] || "";
+  const text = raw.replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return ("[web page] " + (title || text.slice(0, 120)) + (code ? " (error code " + code + ")" : "") + " | " + text.slice(0, 160)).slice(0, 300);
+};
+
 /** Your Syok address, with or without a trailing slash or /v1 (the Developer API page shows it with /v1). */
 export const chatUrl = (base: string) => base.trim().replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/chat/completions";
 async function chat(base: string, key: string, body: any, f: typeof fetch, signal?: AbortSignal, onToken?: (s: string) => void) {
@@ -85,7 +94,7 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
         if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) return await readSSE(r.body, (s) => { emitted = true; onToken(s); });
         return await r.json() as any;
       }
-      const bodyText = (await r.text()).slice(0, 300);
+      const bodyText = briefBody(await r.text());
       last = `HTTP ${r.status} from ${chatUrl(base).replace(/^(https?:\/\/[^/]+).*/, "$1")}: ${bodyText}`;
       if (/daily_limit_reached/.test(bodyText)) { last = "This Syok key reached its daily limit (it resets at midnight UTC; you can raise the limit in Syok > Developer API). " + last; break; }
       if (![408, 409, 425, 429, 500, 502, 503, 504].includes(r.status)) break;
