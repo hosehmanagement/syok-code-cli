@@ -48,7 +48,7 @@ const rows: any[] = [];
 for (const id of ids) {
   const t = JSON.parse(readFileSync(join(dir, id, "task.json"), "utf8"));
   const w = prep(id); const t0 = Date.now(); let err = "", r: any = null;
-  try { r = await runAgent({ root: w, task: t.prompt, base, key, model, mode, profile, ask: async () => false }); } catch (e: any) { err = e.message; }
+  try { r = await runAgent({ root: w, task: t.prompt, base, key, model, mode, profile, ask: async () => false, log: (s) => { if (/throttled by Cloudflare/.test(s)) console.log("  " + s); } }); } catch (e: any) { err = e.message; }
   overlay(id, "hidden", w); const v = sh(t.verify, w);
   const row = { id, pass: v.ok, steps: r?.steps ?? 0, tokens: r?.tokens ?? 0, secs: Math.round((Date.now() - t0) / 1000), stopped: r?.stopped ?? "error", error: err, ranTests: !!r?.ranTests };
   rows.push(row); console.log(`${row.pass ? "PASS" : "FAIL"} ${id}  steps=${row.steps} tokens=${row.tokens} ${row.secs}s ${row.stopped}${err ? " ERR " + err.slice(0, 400) : ""}`);
