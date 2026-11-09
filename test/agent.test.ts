@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { runAgent, compact, loadInstructions, chatUrl } from "../src/agent.ts";
+import { runAgent, compact, loadInstructions, chatUrl, briefBody } from "../src/agent.ts";
 import { DEFAULT, pickProfile } from "../src/profiles.ts";
 import { tmpProject, fakeAI, call } from "./helpers.ts";
 
@@ -95,4 +95,12 @@ test("a daily-limit reply stops at once instead of retrying", async () => {
   let n = 0; const f = (async () => { n++; return new Response('{"error":{"code":"daily_limit_reached","message":"This key reached its daily limit (500 requests)."}}', { status: 429 }); }) as any;
   await expect(runAgent({ root: tmpProject({}), task: "t", base, key: "k", fetchImpl: f })).rejects.toThrow(/daily limit/);
   expect(n).toBe(1);
+});
+
+test("briefBody shrinks an html error page to title and code", () => {
+  const html = "<!DOCTYPE html><html><head><title>syok.workers.dev | 502: Bad gateway</title></head><body><h1>Error code 502</h1><p>Bad gateway</p></body></html>";
+  const out = briefBody(html);
+  expect(out).toContain("502");
+  expect(out.length).toBeLessThanOrEqual(300);
+  expect(briefBody('{"error":"x"}')).toBe('{"error":"x"}');
 });
