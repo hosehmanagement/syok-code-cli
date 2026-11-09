@@ -122,6 +122,17 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
   }
   throw new Error("The AI service failed: " + last);
 }
+/** A tool call the model wrote as text, e.g. {"type":"function","name":"write_file","parameters":{...}} or {"name":"read_file","arguments":{...}}. Returns a real tool call, or null when the text is an ordinary answer. */
+export function textToolCall(content: string, ctx: Ctx): any | null {
+  const t = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  if (!t.startsWith("{") || !t.endsWith("}")) return null;
+  let j: any; try { j = JSON.parse(t); } catch { return null; }
+  const name = j?.name ?? j?.function?.name ?? j?.tool;
+  const args = j?.parameters ?? j?.arguments ?? j?.function?.arguments ?? j?.input ?? j?.args;
+  if (typeof name !== "string" || !/^[a-z_][a-z0-9_]*$/i.test(name) || args === undefined || typeof args !== "object" || args === null) return null;
+  if (!toolDefs(ctx).some((d: any) => d.function?.name === name)) return null;
+  return { id: "text_" + Date.now().toString(36), type: "function", function: { name, arguments: JSON.stringify(args) } };
+}
 const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n) + "\n...[cut]");
 export async function runAgent(o: Opts): Promise<Result> {
   const model = o.model || "syok-coder";
@@ -161,6 +172,8 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     tokens += res.usage?.total_tokens || 0;
     const msg = res.choices?.[0]?.message;
     if (!msg) throw new Error("The AI service returned no message.");
+    // Some models (gpt-oss on Groq, for one) sometimes write the tool call as JSON text instead of a real tool call. Treat it as the call it was meant to be.
+    if (!msg.tool_calls?.length && typeof msg.content === "string") { const salvaged = textToolCall(msg.content, ctx); if (salvaged) { msg.tool_calls = [salvaged]; msg.content = ""; log("(the model wrote a tool call as text; running it as a tool call)"); } }
     messages.push({ role: "assistant", content: msg.content ?? "", ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls } : {}) });
     if (res.__streamed) o.onToken?.("\n"); else if (msg.content) log(String(msg.content));
     const calls = msg.tool_calls || [];
