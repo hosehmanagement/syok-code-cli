@@ -13,7 +13,7 @@ export function fakeAI(script: Array<any | ((req: any) => any)>) {
     const req = JSON.parse(o.body); seen.push(req);
     const s = script[Math.min(i++, script.length - 1)];
     const msg = typeof s === "function" ? s(req) : s;
-    if (msg.__status) return new Response("fail", { status: msg.__status });
+    if (msg.__status) return new Response(msg.__body ?? "fail", { status: msg.__status });
     return new Response(JSON.stringify({ choices: [{ message: msg }], usage: { total_tokens: 10 } }), { status: 200 });
   }) as unknown as typeof fetch;
   return { f, seen };
