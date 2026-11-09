@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { runAgent, compact, loadInstructions, chatUrl, briefBody } from "../src/agent.ts";
+import { runAgent, compact, loadInstructions, chatUrl, briefBody, retryTiming } from "../src/agent.ts";
 import { DEFAULT, pickProfile } from "../src/profiles.ts";
 import { tmpProject, fakeAI, call } from "./helpers.ts";
 
@@ -103,4 +103,21 @@ test("briefBody shrinks an html error page to title and code", () => {
   expect(out).toContain("502");
   expect(out.length).toBeLessThanOrEqual(300);
   expect(briefBody('{"error":"x"}')).toBe('{"error":"x"}');
+});
+
+const cfThrottle = { __status: 503, __body: "<!DOCTYPE html><html><head><title>Worker exceeded resource limits | example.workers.dev | Cloudflare</title></head><body>Error code 1102</body></html>" };
+test("waits out a Cloudflare throttle instead of giving up after a few seconds", async () => {
+  retryTiming.throttleWaitMs = 5; retryTiming.throttleAttempts = 10;
+  const notes: string[] = [];
+  const ai = fakeAI([cfThrottle, cfThrottle, cfThrottle, cfThrottle, cfThrottle, cfThrottle, cfThrottle, { role: "assistant", content: "ok" }]);
+  const r = await runAgent({ root: tmpProject({}), task: "t", base, key: "k", fetchImpl: ai.f, log: (s) => notes.push(s) });
+  expect(r.stopped).toBe("answered"); expect(ai.seen.length).toBe(8);
+  expect(notes.some((s) => /throttled by Cloudflare/.test(s))).toBe(true);
+});
+test("explains a throttle that never clears", async () => {
+  retryTiming.throttleWaitMs = 5; retryTiming.throttleAttempts = 3;
+  const ai = fakeAI([cfThrottle]);
+  await expect(runAgent({ root: tmpProject({}), task: "t", base, key: "k", fetchImpl: ai.f })).rejects.toThrow(/throttled for too long/);
+  expect(ai.seen.length).toBe(4);
+  retryTiming.throttleWaitMs = 45_000; retryTiming.throttleAttempts = 10;
 });
