@@ -20,7 +20,9 @@ Rules:
 9. When finished, call finish with a short plain summary of what you changed and what you checked. If the task is impossible or unsafe, call finish and explain why.`;
 
 export interface Msg { role: string; content?: any; tool_calls?: any[]; tool_call_id?: string; name?: string }
-export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean }
+export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean; routes: Route[] }
+/** Which provider answered one step, and what the failed attempts before it said (from the X-Syok-* reply headers). */
+export interface Route { provider: string; model: string; attempts: string }
 export interface Opts {
   root: string; task: string; base: string; key: string; model?: string; mode?: Mode; ask?: Asker; settings?: Settings;
   profile?: Profile; fetchImpl?: typeof fetch; log?: (s: string) => void; ctx?: Ctx; history?: Msg[]; signal?: AbortSignal;
@@ -97,7 +99,9 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
       const r = await f(chatUrl(base), { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body: JSON.stringify(payload), signal });
       if (r.ok) {
         if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) return await readSSE(r.body, (s) => { emitted = true; onToken(s); });
-        return await r.json() as any;
+        const data = await r.json() as any;
+        if (data && typeof data === "object") data.__route = { provider: r.headers.get("x-syok-provider") || "", model: r.headers.get("x-syok-model") || "", attempts: r.headers.get("x-syok-attempts") || "" };
+        return data;
       }
       const bodyText = briefBody(await r.text());
       last = `HTTP ${r.status} from ${host}: ${bodyText}`;
@@ -151,7 +155,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
   const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || SYSTEM) + loadInstructions(ctx.root) + (ctx.depth === 0 ? langContext(ctx.root) : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
   messages.push({ role: "user", content: o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.` });
   const f = o.fetchImpl || fetch;
-  let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0;
+  let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0; const routes: Route[] = [];
   const sub = async (task: string, role: string): Promise<string> => {
     const explorer = role !== "worker";
     const child: Ctx = { ...ctx, depth: ctx.depth + 1, allowed: explorer ? READONLY : undefined };
@@ -170,6 +174,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     if (compact(messages, profile)) log("(older tool output shortened to save room)");
     const res = await chat(o.base, o.key, { model, messages, tools: toolDefs(ctx), tool_choice: "auto", temperature: profile.temperature }, f, o.signal, o.onToken, log);
     tokens += res.usage?.total_tokens || 0;
+    if (res.__route) routes.push(res.__route);
     const msg = res.choices?.[0]?.message;
     if (!msg) throw new Error("The AI service returned no message.");
     // Some models (gpt-oss on Groq, for one) sometimes write the tool call as JSON text instead of a real tool call. Treat it as the call it was meant to be.
@@ -220,6 +225,6 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     if (finished) break;
   }
   if (!stopped) { stopped = "max_steps"; summary = `Stopped after ${profile.maxSteps} steps without finishing.`; }
-  return { summary, steps, tokens, touched: [...ctx.touched], stopped, messages, ranTests: ctx.ran.tests };
+  return { summary, steps, tokens, touched: [...ctx.touched], stopped, messages, ranTests: ctx.ran.tests, routes };
 }
 export { makeCtx, undoAll };
