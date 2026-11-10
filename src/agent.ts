@@ -22,7 +22,7 @@ Rules:
 export interface Msg { role: string; content?: any; tool_calls?: any[]; tool_call_id?: string; name?: string }
 export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean; routes: Route[] }
 /** Which provider answered one step, and what the failed attempts before it said (from the X-Syok-* reply headers). */
-export interface Route { provider: string; model: string; attempts: string }
+export interface Route { provider: string; model: string; attempts: string; details: string }
 export interface Opts {
   root: string; task: string; base: string; key: string; model?: string; mode?: Mode; ask?: Asker; settings?: Settings;
   profile?: Profile; fetchImpl?: typeof fetch; log?: (s: string) => void; ctx?: Ctx; history?: Msg[]; signal?: AbortSignal;
@@ -100,7 +100,7 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
       if (r.ok) {
         if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) return await readSSE(r.body, (s) => { emitted = true; onToken(s); });
         const data = await r.json() as any;
-        if (data && typeof data === "object") data.__route = { provider: r.headers.get("x-syok-provider") || "", model: r.headers.get("x-syok-model") || "", attempts: r.headers.get("x-syok-attempts") || "" };
+        if (data && typeof data === "object") data.__route = { provider: r.headers.get("x-syok-provider") || "", model: r.headers.get("x-syok-model") || "", attempts: r.headers.get("x-syok-attempts") || "", details: r.headers.get("x-syok-attempt-details") || "" };
         return data;
       }
       const bodyText = briefBody(await r.text());
