@@ -143,5 +143,5 @@ test("records which provider answered each step from the X-Syok headers", async 
   let n = 0;
   const f = (async () => { n++; return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "done" } }], usage: { total_tokens: 3 } }), { status: 200, headers: { "x-syok-provider": "claude", "x-syok-model": "claude-sonnet-5", "x-syok-attempts": "deepseek:server_error,claude:success" } }); }) as any;
   const r = await runAgent({ root: tmpProject({}), task: "t", base, key: "k", fetchImpl: f });
-  expect(r.routes).toEqual([{ provider: "claude", model: "claude-sonnet-5", attempts: "deepseek:server_error,claude:success" }]);
+  expect(r.routes).toEqual([{ provider: "claude", model: "claude-sonnet-5", attempts: "deepseek:server_error,claude:success", details: "" }]);
 });
