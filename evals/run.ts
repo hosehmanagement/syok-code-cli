@@ -51,12 +51,14 @@ for (const id of ids) {
   try { r = await runAgent({ root: w, task: t.prompt, base, key, model, mode, profile, ask: async () => false, log: (s) => { if (/throttled by Cloudflare/.test(s)) console.log("  " + s); } }); } catch (e: any) { err = e.message; }
   overlay(id, "hidden", w); const v = sh(t.verify, w);
   // Who answered: e.g. "claude x6, builtin x2"; plus the failed attempts the router reported before the first answer of the step that changed provider.
-  const routes: { provider: string; model: string; attempts: string }[] = r?.routes ?? [];
+  const routes: { provider: string; model: string; attempts: string; details: string }[] = r?.routes ?? [];
+  const saidWhy = [...new Set(routes.map((x) => x.details).filter(Boolean))].slice(0, 3).join(" || ");
   const byProvider: Record<string, number> = {}; for (const x of routes) byProvider[x.provider || "?"] = (byProvider[x.provider || "?"] || 0) + 1;
   const via = Object.entries(byProvider).map(([p, n]) => `${p} x${n}`).join(", ");
   const failedAttempts = [...new Set(routes.flatMap((x) => x.attempts.split(",").filter((a) => a && !/:success$/.test(a))))].slice(0, 8).join(",");
-  const row = { id, pass: v.ok, steps: r?.steps ?? 0, tokens: r?.tokens ?? 0, secs: Math.round((Date.now() - t0) / 1000), stopped: r?.stopped ?? "error", error: err, ranTests: !!r?.ranTests, via: byProvider, failedAttempts };
+  const row = { id, pass: v.ok, steps: r?.steps ?? 0, tokens: r?.tokens ?? 0, secs: Math.round((Date.now() - t0) / 1000), stopped: r?.stopped ?? "error", error: err, ranTests: !!r?.ranTests, via: byProvider, failedAttempts, saidWhy };
   rows.push(row); console.log(`${row.pass ? "PASS" : "FAIL"} ${id}  steps=${row.steps} tokens=${row.tokens} ${row.secs}s ${row.stopped}${via ? "  via " + via : ""}${failedAttempts ? "  (skipped: " + failedAttempts + ")" : ""}${err ? " ERR " + err.slice(0, 400) : ""}`);
+  if (saidWhy) console.log("   providers said: " + saidWhy.slice(0, 900));
   if (/daily limit/.test(err)) { console.log("Stopping: the Syok key hit its daily limit, so the remaining tasks were not run."); break; }
   if (!row.pass && !err) console.log("   why: " + (v.out.trim().split("\n").slice(-8).join(" | ").slice(-500)) + "\n   agent said: " + String(r?.summary || "").replace(/\s+/g, " ").slice(0, 300));
 }
