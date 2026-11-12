@@ -75,7 +75,8 @@ export function resetShellCache() { cached = null; }
 /** The arguments that make this shell run one command line. */
 export function shellArgs(sh: Shell, command: string): string[] {
   if (sh.kind === "bash") return ["-lc", command];
-  if (sh.kind === "powershell") return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command];
+  // PowerShell -Command reports 1 for any failure; the lines after the command pass the real exit code of a program through.
+  if (sh.kind === "powershell") return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command + "\n$__ok = $?; $__c = $LASTEXITCODE; if (-not $__ok) { if ($__c) { exit $__c } else { exit 1 } }; exit 0"];
   return ["/d", "/s", "/c", command];
 }
 
