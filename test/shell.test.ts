@@ -44,7 +44,9 @@ test("Linux and Mac use bash; sh only if bash is missing", () => {
 });
 test("each shell gets the right arguments", () => {
   expect(shellArgs({ kind: "bash", exe: "bash", label: "", hint: "" }, "ls")).toEqual(["-lc", "ls"]);
-  expect(shellArgs({ kind: "powershell", exe: "p", label: "", hint: "" }, "dir")).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "dir"]);
+  const ps = shellArgs({ kind: "powershell", exe: "p", label: "", hint: "" }, "dir");
+  expect(ps.slice(0, 4)).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]);
+  expect(ps[4].startsWith("dir\n")).toBe(true); expect(ps[4]).toContain("$LASTEXITCODE");
   expect(shellArgs({ kind: "cmd", exe: "c", label: "", hint: "" }, "dir")).toEqual(["/d", "/s", "/c", "dir"]);
 });
 test("the hint tells the AI which shell it has", () => {
