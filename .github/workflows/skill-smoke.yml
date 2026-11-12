@@ -1,1 +1,49 @@
+name: skill-smoke
+# Runs a real skill through your Syok AI key and checks the AI really ran the command (no key is typed here: it uses the repository secrets SYOK_BASE_URL and SYOK_API_KEY that the score workflow already uses).
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model or preset"
+        default: "syok-auto"
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Make a tiny project with one skill
+        run: |
+          mkdir -p smoke/.syok/skills/seven
+          cat > smoke/.syok/skills/seven/SKILL.md <<'EOF'
+          ---
+          name: seven
+          description: Prove that skills can run commands
+          allowed-tools: Bash(node -e)
+          ---
+          # Seven
+          Run this command and write exactly what it prints into a new file called result.txt:
 
+          ```bash
+          node -e "console.log('SKILL-OK-' + 6 * 7)"
+          ```
+          EOF
+      - name: Run the skill
+        env:
+          SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          bun src/main.ts skill seven "do it" --cwd smoke --mode auto --model "$MODEL" --max-steps 12 --json | tee run.json
+      - name: Check the result
+        run: |
+          cat smoke/result.txt
+          grep -q "SKILL-OK-42" smoke/result.txt
+          node -e "const j=JSON.parse(require('fs').readFileSync('run.json','utf8').trim().split('\n').pop()); if(!(j.commands>=1)) {console.error('the AI ran no command'); process.exit(1)} console.log('commands run:', j.commands)"
+      - name: Summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"; cat run.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true; echo '```' >> "$GITHUB_STEP_SUMMARY"
