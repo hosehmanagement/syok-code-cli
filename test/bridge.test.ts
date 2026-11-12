@@ -144,7 +144,7 @@ test("pairing sends the address and the secret once, and remembers it", async ()
   const f = (async (u: any, init: any) => { url = String(u); got = JSON.parse(init.body); return new Response("{}", { status: 200 }); }) as any;
   const r = await pair("abcd-1234", "https://syok.example/", { home: h, env: { CODESPACE_NAME: "happy-cs-abc" }, fetchImpl: f });
   expect(r.ok).toBe(true);
-  expect(url).toBe("https://syok.example/v1/codespace/register");
+  expect(url).toBe("https://syok.example/v1/codespace/register"); await pair("abcd-1234", "https://syok.example/v1/", { home: h, env: { CODESPACE_NAME: "happy-cs-abc" }, fetchImpl: f }); expect(url).toBe("https://syok.example/v1/codespace/register");
   expect(got.code).toBe("ABCD-1234"); expect(got.url).toBe("https://happy-cs-abc-8787.app.github.dev"); expect(got.name).toBe("happy-cs-abc");
   expect(got.secret).toBe(loadState(h).secret);
   expect(loadState(h).pairedAt).toBeGreaterThan(0);
