@@ -51,5 +51,15 @@ Syok Code is specialised for programming. It knows how to check code in 30+ lang
 - `syok test lib.rs`: writes and runs tests; a real bug is reported, not hidden.
 In chat the same modes are `/gen`, `/translate`, `/debug`, `/explain`, `/test`. Language notes for the project are detected from files like `go.mod`, `Cargo.toml`, `package.json` and added automatically. By default it asks your Syok AI for the `syok-coder` preset, which tries your code-strong providers first (use `--model syok-auto` for normal routing). You can also pick a specific code-strong model with `--model` (for example a Qwen-Coder or DeepSeek-Coder name); open coder models get a tuned profile.
 
+## Skills (v0.4)
+A skill is a `SKILL.md` file of instructions. The AI follows it and, when the skill needs commands, runs them itself.
+- Put skills in `.syok/skills/<name>/SKILL.md` (project) or `~/.syok/skills/` (all projects). Claude-style `.claude/skills/` folders work as they are.
+- `syok skills` lists them. `syok skill add <github link or owner/repo/path>` saves one. `syok skill <name> "what you want"` runs one. In chat: `/skills`, `/skill <name> <task>`, or `/<name> <task>`.
+- Before it starts you see the commands the skill mentions. Each command still goes through your approval (or `--mode auto`); blocked commands (sudo, wiping a drive, curl-to-shell, forced push...) stay blocked even if a skill asks.
+- A skill can list commands it needs in its header: `allowed-tools: Bash(npm test:*), Bash(git status)`. You are asked once at the start whether to allow them for that run.
+- If the AI tries to finish a command-running skill without running any command, it is sent back twice; if it still does not, the result says "WARNING: the AI ran none".
+- Windows: commands run in Git Bash if installed, otherwise PowerShell, otherwise Command Prompt (WSL not needed). `SYOK_SHELL=bash|powershell|cmd` forces one. GitHub tests this on a real Windows machine for every change.
+- `skill-smoke` workflow (Actions tab): runs a real skill through your Syok key and checks the AI really ran the command.
+
 ## Not yet
-Interactive terminals (programs that wait for typed input), a Windows-native shell (needs Git Bash or WSL for now), and a web bridge to the Syok app. See the plan in the Syok project notes.
+Interactive terminals (programs that wait for typed input), syncing the skills you installed on the Syok website into the CLI, and a web bridge to the Syok app. See the plan in the Syok project notes.
