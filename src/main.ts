@@ -31,6 +31,10 @@ Skills (instruction files the AI follows, including commands it runs itself):
   syok skills                                  list your skills (.syok/skills, .claude/skills and ~/.syok/skills)
   syok skill add <github-link|owner/repo/path|file>   save a skill into this project
   syok skill <name> "what you want"            run a skill: it shows its commands first, and you still approve each one (or use --mode auto)
+Codespace link (lets the Syok website run commands in your own GitHub Codespace):
+  syok bridge                                  start the small command server (a Codespace from the Syok template does this by itself)
+  syok pair <code>                             link this Codespace to your Syok account with the one-time code shown in Syok
+  syok unpair                                  make a new secret, so the old link stops working
 Options:
   --cwd <folder>        project folder (default: current folder)
   --model <name>        model or preset (default: syok-coder; syok-auto = general routing)
@@ -51,6 +55,11 @@ Extras (in <project>/.syok/settings.json):
   "allow": ["npm run"], "deny": ["curl"]    command prefixes to always allow / block
 The AI can also delegate to helper agents (read-only explorers run in parallel) and run background jobs (dev servers).`;
 if (has("--help") || has("-h")) { console.log(HELP); process.exit(0); }
+if (["bridge", "pair", "unpair"].includes(process.argv[2] ?? "")) {
+  // The bridge needs no API key: it only serves commands to a caller that holds its secret.
+  const { bridgeCommand } = await import("./bridge.ts");
+  process.exit(await bridgeCommand(process.argv.slice(2), { base: process.env.SYOK_BASE_URL || readJson(join(homedir(), ".syok", "config.json")).base || "" }));
+}
 const cfg = readJson(join(homedir(), ".syok", "config.json"));
 const base = process.env.SYOK_BASE_URL || cfg.base || "", key = process.env.SYOK_API_KEY || cfg.key || "";
 if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok --help"); process.exit(2); }
