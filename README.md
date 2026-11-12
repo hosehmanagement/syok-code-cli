@@ -63,3 +63,16 @@ A skill is a `SKILL.md` file of instructions. The AI follows it and, when the sk
 
 ## Not yet
 Interactive terminals (programs that wait for typed input), syncing the skills you installed on the Syok website into the CLI, and a web bridge to the Syok app. See the plan in the Syok project notes.
+
+## New in 0.6
+
+- **Plan mode**: `syok --mode plan` or `/plan <task>` explores read-only, writes a plan and asks before anything changes. `/mode` cycles ask, accept-edits, plan, auto.
+- **Saved chats**: every chat is saved in .syok/sessions. `syok --continue`, `syok --resume 2` or `/resume` pick one up. `/compact` summarizes a long chat (this also happens by itself when it gets very long).
+- **Checkpoints**: one is saved before each message. `/checkpoints`, `/rewind 3` puts every file and the chat back.
+- **Instructions**: SYOK.md, AGENTS.md, CLAUDE.md, .claude/CLAUDE.md and ~/.syok/SYOK.md are all read. `/init` writes SYOK.md for you.
+- **Your own commands**: .syok/commands/name.md becomes /name (`$ARGUMENTS` = what you type after it).
+- **Plugins**: `syok plugin add owner/repo` installs a bundle of skills, commands and hooks.
+- **Pictures**: write @screenshot.png in a message, or `/image shot.png what is wrong?`.
+- **GitHub**: `syok review 12` reviews a pull request (read-only); `syok pr "title"` commits to a branch and opens a pull request after you approve.
+- **Scripts and CI**: `echo "task" | syok -p - --json`.
+- **Isolation**: dangerous commands are always blocked; for real isolation use the Daytona sandbox (`syok sandbox start owner/repo`, then `--sandbox`). There is no Docker mode.

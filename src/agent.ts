@@ -6,6 +6,9 @@ import { startMcp } from "./mcp.ts";
 import { langContext } from "./langs.ts";
 import { shellHint } from "./shell.ts";
 import { MUST_RUN_NUDGE } from "./skills.ts";
+import { homedir } from "node:os";
+import { summarizeHistory } from "./compactor.ts";
+import { withImages } from "./image.ts";
 import { pickProfile, type Profile } from "./profiles.ts";
 import type { Mode, Asker, Settings } from "./perm.ts";
 
@@ -31,15 +34,25 @@ export interface Opts {
   onToken?: (s: string) => void; system?: string;
   /** A skill that needs commands is running: finishing without running any is sent back (twice at most). */
   mustRun?: boolean;
+  /** Pictures (data: addresses) sent with the first message of this turn. */
+  images?: string[];
+  /** Do not summarize the chat when it gets very long. */
+  noSummary?: boolean;
 }
-export function loadInstructions(root: string): string {
-  for (const f of ["SYOK.md", "AGENTS.md", "CLAUDE.md"]) {
-    const p = join(root, f);
-    if (existsSync(p)) return `\n\nProject instructions (${f}):\n` + readFileSync(p, "utf8").slice(0, 8000);
-  }
-  return "";
+export function loadInstructions(root: string, home = homedir()): string {
+  const seen = new Set<string>(); let out = "", left = 14000;
+  const add = (label: string, p: string) => {
+    if (left <= 0 || !existsSync(p)) return;
+    let t = ""; try { t = readFileSync(p, "utf8").trim(); } catch { return; }
+    if (!t || seen.has(t)) return; seen.add(t);
+    const body = t.slice(0, Math.min(6000, left)); left -= body.length;
+    out += "\n\n" + label + ":\n" + body;
+  };
+  add("Your personal instructions (~/.syok/SYOK.md)", join(home, ".syok", "SYOK.md"));
+  for (const f of ["SYOK.md", ".syok/SYOK.md", "AGENTS.md", "CLAUDE.md", ".claude/CLAUDE.md"]) add("Project instructions (" + f + ")", join(root, f));
+  return out;
 }
-const size = (m: Msg[]) => m.reduce((n, x) => n + (typeof x.content === "string" ? x.content.length : 0) + (x.tool_calls ? JSON.stringify(x.tool_calls).length : 0), 0);
+export const size = (m: Msg[]) => m.reduce((n, x) => n + (typeof x.content === "string" ? x.content.length : 0) + (x.tool_calls ? JSON.stringify(x.tool_calls).length : 0), 0);
 /** Shorten old tool results when the chat gets long. Newest keepRecent results stay whole. */
 export function compact(messages: Msg[], p: Profile): number {
   if (size(messages) <= p.compactAtChars) return 0;
@@ -50,6 +63,12 @@ export function compact(messages: Msg[], p: Profile): number {
     if (typeof c === "string" && c.length > 240 && !c.startsWith("[old output")) { messages[i].content = `[old output shortened] ${c.slice(0, 160).replace(/\s+/g, " ")} ...`; n++; }
   }
   return n;
+}
+export const PLAN_NOTE = "PLAN MODE: change nothing yet. Explore with the read-only tools, then call finish with a short numbered plan: which files to change, what to change in each, and how you will check it. The user approves the plan before any edit.\n\n";
+/** One plain question to the AI, no tools (used to summarize a long chat). */
+export async function askModel(base: string, key: string, model: string, prompt: string, f: typeof fetch = fetch, signal?: AbortSignal): Promise<string> {
+  const res = await chat(base, key, { model, messages: [{ role: "user", content: prompt }], temperature: 0.2 }, f, signal);
+  return String(res.choices?.[0]?.message?.content || "");
 }
 const EXPLORER = `You are a read-only research helper for Syok Code. Answer the question you were given using list_files, read_file, search and find_files. Change nothing. When done call finish with a compact answer: exact file paths with line numbers and the facts needed, no padding.`;
 const WORKER = `You are a focused helper for Syok Code. Do only the sub-task you were given, with the smallest change, then run the relevant check and call finish with the files you changed and the result.`;
@@ -157,9 +176,10 @@ export async function runAgent(o: Opts): Promise<Result> {
 async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s: string) => void): Promise<Result> {
   const hooks = ctx.settings.hooks || {};
   const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || SYSTEM) + loadInstructions(ctx.root) + (ctx.depth === 0 ? langContext(ctx.root) + shellHint() : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
-  messages.push({ role: "user", content: o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.` });
+  const planned = ctx.mode === "plan" && ctx.depth === 0 ? PLAN_NOTE : "";
+  messages.push({ role: "user", content: withImages(planned + (o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.`), o.images || []) });
   const f = o.fetchImpl || fetch;
-  let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0, runTries = 0; const routes: Route[] = [];
+  let summaryFailed = false; let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0, runTries = 0; const routes: Route[] = [];
   const sub = async (task: string, role: string): Promise<string> => {
     const explorer = role !== "worker";
     const child: Ctx = { ...ctx, depth: ctx.depth + 1, allowed: explorer ? READONLY : undefined };
@@ -182,6 +202,12 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
   while (steps < profile.maxSteps) {
     steps++;
     if (compact(messages, profile)) log("(older tool output shortened to save room)");
+    if (!o.noSummary && !summaryFailed && ctx.depth === 0 && messages.length > 12 && size(messages) > profile.compactAtChars * 2) {
+      try {
+        const r = await summarizeHistory(messages, (p) => askModel(o.base, o.key, model, p, f, o.signal));
+        if (r.removed) { messages.splice(0, messages.length, ...r.messages); log("(the earlier conversation was summarized to save room)"); } else summaryFailed = true;
+      } catch (e: any) { summaryFailed = true; log("(could not summarize the chat: " + e.message + ")"); }
+    }
     const res = await chat(o.base, o.key, { model, messages, tools: toolDefs(ctx), tool_choice: "auto", temperature: profile.temperature }, f, o.signal, o.onToken, log);
     tokens += res.usage?.total_tokens || 0;
     if (res.__route) routes.push(res.__route);

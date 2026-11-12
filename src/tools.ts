@@ -41,7 +41,7 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string> }
+export interface Ctx { root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; sandbox?: (cmd: string, secs: number) => Promise<string> }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
   return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0 };
 }
@@ -163,7 +163,8 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
         if (!p.ok) { c.ran.declined++; return "Not run. " + p.why; }
         c.ran.commands++;
         if (/\b(test|pytest|unittest|jest|vitest|go test|cargo test|check)\b/.test(cmd)) c.ran.tests = true;
-        return await sh(c, cmd, Math.min(600, Math.max(5, a.timeout_sec || 120)));
+        const secs = Math.min(600, Math.max(5, a.timeout_sec || 120));
+        return c.sandbox ? await c.sandbox(cmd, secs) : await sh(c, cmd, secs);
       }
       case "bg_start": {
         const cmd = String(a.command || "");
