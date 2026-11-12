@@ -13,3 +13,24 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun test ./test
       - run: bun evals/run.ts --check
+  # Windows is tested for real: the shell picker, skills, the Windows safety rules and the skill run are run on a Windows machine.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Windows tests (must pass)
+        run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts
+      - name: Which shell was picked
+        run: bun -e "import('./src/shell.ts').then(m=>console.log(m.currentShell()))"
+      - name: PowerShell shell test
+        env:
+          SYOK_SHELL: powershell
+        run: bun test test/shell.test.ts test/skillrun.test.ts
+      - name: Command Prompt shell test
+        env:
+          SYOK_SHELL: cmd
+        run: bun test test/shell.test.ts test/skillrun.test.ts
+      - name: Every test on Windows (information only)
+        continue-on-error: true
+        run: bun test ./test

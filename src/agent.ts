@@ -4,6 +4,8 @@ import { toolDefs, makeCtx, runTool, undoAll, READONLY, type Ctx } from "./tools
 import { runHooks } from "./hooks.ts";
 import { startMcp } from "./mcp.ts";
 import { langContext } from "./langs.ts";
+import { shellHint } from "./shell.ts";
+import { MUST_RUN_NUDGE } from "./skills.ts";
 import { pickProfile, type Profile } from "./profiles.ts";
 import type { Mode, Asker, Settings } from "./perm.ts";
 
@@ -20,13 +22,15 @@ Rules:
 9. When finished, call finish with a short plain summary of what you changed and what you checked. If the task is impossible or unsafe, call finish and explain why.`;
 
 export interface Msg { role: string; content?: any; tool_calls?: any[]; tool_call_id?: string; name?: string }
-export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean; routes: Route[] }
+export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean; routes: Route[]; commands: number; declined: number }
 /** Which provider answered one step, and what the failed attempts before it said (from the X-Syok-* reply headers). */
 export interface Route { provider: string; model: string; attempts: string; details: string }
 export interface Opts {
   root: string; task: string; base: string; key: string; model?: string; mode?: Mode; ask?: Asker; settings?: Settings;
   profile?: Profile; fetchImpl?: typeof fetch; log?: (s: string) => void; ctx?: Ctx; history?: Msg[]; signal?: AbortSignal;
   onToken?: (s: string) => void; system?: string;
+  /** A skill that needs commands is running: finishing without running any is sent back (twice at most). */
+  mustRun?: boolean;
 }
 export function loadInstructions(root: string): string {
   for (const f of ["SYOK.md", "AGENTS.md", "CLAUDE.md"]) {
@@ -152,10 +156,10 @@ export async function runAgent(o: Opts): Promise<Result> {
 }
 async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s: string) => void): Promise<Result> {
   const hooks = ctx.settings.hooks || {};
-  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || SYSTEM) + loadInstructions(ctx.root) + (ctx.depth === 0 ? langContext(ctx.root) : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
+  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || SYSTEM) + loadInstructions(ctx.root) + (ctx.depth === 0 ? langContext(ctx.root) + shellHint() : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
   messages.push({ role: "user", content: o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.` });
   const f = o.fetchImpl || fetch;
-  let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0; const routes: Route[] = [];
+  let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0, runTries = 0; const routes: Route[] = [];
   const sub = async (task: string, role: string): Promise<string> => {
     const explorer = role !== "worker";
     const child: Ctx = { ...ctx, depth: ctx.depth + 1, allowed: explorer ? READONLY : undefined };
@@ -168,6 +172,12 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     const h = await runHooks(hooks.Stop, "Stop", { cwd: ctx.root, touched: [...ctx.touched] }, ctx.root);
     if (!h.block) { if (h.message) log("[hook] " + h.message); return false; }
     stopTries++; messages.push({ role: "user", content: "A Stop hook says the work is not done yet:\n" + h.message + "\nFix this, then finish again." }); log("[hook blocked finishing] " + h.message); return true;
+  };
+  // A skill that needs commands must run at least one (or be refused by the user); asks twice, then accepts.
+  const runGate = (): boolean => {
+    if (!o.mustRun || ctx.depth > 0 || ctx.ran.commands > 0 || ctx.ran.declined > 0 || runTries >= 2) return false;
+    runTries++; messages.push({ role: "user", content: MUST_RUN_NUDGE }); log("[skill check] no command was run yet; asked the AI to run them");
+    return true;
   };
   while (steps < profile.maxSteps) {
     steps++;
@@ -184,6 +194,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     const calls = msg.tool_calls || [];
     if (!calls.length) {
       if (profile.nudgeTests && !nudged && ctx.touched.size && !ctx.ran.tests) { nudged = true; messages.push({ role: "user", content: "You changed files but have not run any tests or checks. Run them now, or call finish and say why you could not." }); continue; }
+      if (runGate()) continue;
       if (await stopGate()) continue;
       summary = String(msg.content || "(no summary)"); stopped = "answered"; break;
     }
@@ -197,7 +208,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
       if (args === null) { messages.push({ role: "tool", tool_call_id: tc.id, name, content: "Error: the tool arguments were not valid JSON. Send the call again with valid JSON." }); continue; }
       if (name === "finish") {
         messages.push({ role: "tool", tool_call_id: tc.id, name, content: "ok" });
-        if (await stopGate()) { for (let j = i + 1; j < calls.length; j++) messages.push({ role: "tool", tool_call_id: calls[j].id, name: calls[j].function?.name, content: "skipped" }); break; }
+        if (runGate() || await stopGate()) { for (let j = i + 1; j < calls.length; j++) messages.push({ role: "tool", tool_call_id: calls[j].id, name: calls[j].function?.name, content: "skipped" }); break; }
         summary = String(args.summary || ""); stopped = "finished"; finished = true; break;
       }
       const sig = name + JSON.stringify(args); repeats = sig === lastSig ? repeats + 1 : 0; lastSig = sig;
@@ -225,6 +236,6 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     if (finished) break;
   }
   if (!stopped) { stopped = "max_steps"; summary = `Stopped after ${profile.maxSteps} steps without finishing.`; }
-  return { summary, steps, tokens, touched: [...ctx.touched], stopped, messages, ranTests: ctx.ran.tests, routes };
+  return { summary, steps, tokens, touched: [...ctx.touched], stopped, messages, ranTests: ctx.ran.tests, routes, commands: ctx.ran.commands, declined: ctx.ran.declined };
 }
 export { makeCtx, undoAll };

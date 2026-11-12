@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { resolve, relative, dirname, join, sep } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { spawnCommand, killTree } from "./shell.ts";
 import { isProtected, SECRET_LIKE, allowEdit, allowCommand, type Mode, type Asker, type Settings } from "./perm.ts";
 import type { Profile } from "./profiles.ts";
 import { unifiedDiff } from "./diff.ts";
@@ -40,9 +41,9 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string> }
+export interface Ctx { root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string> }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
-  return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false }, bg: new Bg(), mcp: [], depth: 0 };
+  return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0 };
 }
 function safePath(c: Ctx, p: string): { abs: string; rel: string } {
   const abs = resolve(c.root, p || ".");
@@ -159,14 +160,16 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
       case "run_command": {
         const cmd = String(a.command || "");
         const p = await allowCommand(c.mode, c.ask, cmd, c.settings);
-        if (!p.ok) return "Not run. " + p.why;
+        if (!p.ok) { c.ran.declined++; return "Not run. " + p.why; }
+        c.ran.commands++;
         if (/\b(test|pytest|unittest|jest|vitest|go test|cargo test|check)\b/.test(cmd)) c.ran.tests = true;
         return await sh(c, cmd, Math.min(600, Math.max(5, a.timeout_sec || 120)));
       }
       case "bg_start": {
         const cmd = String(a.command || "");
         const p = await allowCommand(c.mode, c.ask, cmd, c.settings);
-        if (!p.ok) return "Not run. " + p.why;
+        if (!p.ok) { c.ran.declined++; return "Not run. " + p.why; }
+        c.ran.commands++;
         const id = c.bg.start(cmd, c.root);
         await new Promise((ok) => setTimeout(ok, 700));
         return `Started background job ${id}. Output so far:\n` + c.bg.output(id, 1500);
@@ -181,11 +184,11 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
 function sh(c: Ctx, cmd: string, secs: number): Promise<string> {
   return new Promise((res) => {
     const env = { ...process.env }; delete env.SYOK_API_KEY; delete env.GITHUB_TOKEN;
-    const ch = spawn("bash", ["-lc", cmd], { cwd: c.root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const ch = spawnCommand(cmd, c.root, env, ["ignore", "pipe", "pipe"]);
     let out = "", done = false;
     const add = (d: Buffer) => { out += d.toString(); if (out.length > 400_000) out = out.slice(-200_000); };
-    ch.stdout.on("data", add); ch.stderr.on("data", add);
-    const kill = () => { try { process.kill(-ch.pid!, "SIGKILL"); } catch { try { ch.kill("SIGKILL"); } catch {} } };
+    ch.stdout!.on("data", add); ch.stderr!.on("data", add);
+    const kill = () => killTree(ch);
     const t = setTimeout(() => { if (!done) { kill(); out += `\n[stopped after ${secs} seconds]`; } }, secs * 1000);
     ch.on("close", (code) => { done = true; clearTimeout(t); res(cut(out.trim(), c.profile.maxToolChars) + `\n[exit code ${code ?? "none"}]`); });
     ch.on("error", (e) => { done = true; clearTimeout(t); res("Error: " + e.message); });
