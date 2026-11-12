@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - name: Windows tests (must pass)
-        run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts
+        run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts test/bridge.test.ts
       - name: Which shell was picked
         run: bun -e "import('./src/shell.ts').then(m=>console.log(m.currentShell()))"
       - name: PowerShell shell test
