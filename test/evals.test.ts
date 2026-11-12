@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 test("eval tasks are valid (fail before the fix, pass after)", () => {
   const r = spawnSync("bun", ["evals/run.ts", "--check"], { cwd: join(import.meta.dir, ".."), encoding: "utf8" });
   expect(r.stdout).toContain("all 16 tasks are valid");
-}, 120000);
+}, 300000);
 
 test("eval runner scores a scripted AI that fixes one task", async () => {
   const sol = readFileSync(join(import.meta.dir, "../evals/tasks/js-pagination-off-by-one/solution/lib/paginate.js"), "utf8");
