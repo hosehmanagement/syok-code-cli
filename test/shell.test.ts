@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
 import { pickShell, shellArgs, spawnCommand, killTree, shellHint, currentShell, type ShellEnv } from "../src/shell.ts";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const win = (o: { files?: string[]; which?: Record<string, string>; env?: Record<string, string> } = {}): ShellEnv => ({
   platform: "win32",
@@ -51,22 +54,25 @@ test("the hint tells the AI which shell it has", () => {
 });
 
 // These run a real command in the real shell of the machine running the tests (Linux, Mac or Windows).
+// The commands use small script files, not node -e "...": Windows PowerShell strips the inner double quotes.
+const dir = mkdtempSync(join(tmpdir(), "syok-sh-"));
+writeFileSync(join(dir, "five.js"), "console.log(2+3)"); writeFileSync(join(dir, "exit3.js"), "process.exit(3)"); writeFileSync(join(dir, "long.js"), "setTimeout(()=>{},60000)");
 const run = (cmd: string, secs = 20) => new Promise<{ out: string; code: number | null }>((res) => {
-  const p = spawnCommand(cmd, process.cwd(), process.env, ["ignore", "pipe", "pipe"]);
+  const p = spawnCommand(cmd, dir, process.env, ["ignore", "pipe", "pipe"]);
   let out = ""; p.stdout!.on("data", (d) => (out += d)); p.stderr!.on("data", (d) => (out += d));
   const t = setTimeout(() => { killTree(p); }, secs * 1000);
   p.on("close", (code) => { clearTimeout(t); res({ out: out.trim(), code }); });
 });
 test("real shell: prints output", async () => {
-  const r = await run('node -e "console.log(2+3)"');
+  const r = await run("node five.js");
   expect(r.out).toContain("5"); expect(r.code).toBe(0);
 });
 test("real shell: passes the exit code back", async () => {
-  expect((await run('node -e "process.exit(3)"')).code).toBe(3);
+  expect((await run("node exit3.js")).code).toBe(3);
 });
 test("real shell: stops a command that runs too long", async () => {
   const t0 = Date.now();
-  const p = spawnCommand('node -e "setTimeout(()=>{},60000)"', process.cwd(), process.env, ["ignore", "pipe", "pipe"]);
+  const p = spawnCommand("node long.js", dir, process.env, ["ignore", "pipe", "pipe"]);
   await new Promise((r) => setTimeout(r, 600));
   killTree(p);
   await new Promise((r) => p.on("close", r));
