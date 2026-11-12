@@ -2,6 +2,7 @@
 // Looked for in: <project>/.syok/skills, <project>/.claude/skills (Claude-style skills work as they are), ~/.syok/skills.
 // A skill is either <dir>/<name>/SKILL.md or <dir>/<name>.md. A project skill beats a home-folder skill with the same name.
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { pluginDirs } from "./plugins.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -95,6 +96,7 @@ function readDir(dir: string, source: "project" | "home", into: Map<string, Skil
 /** All skills the user has, project first. */
 export function loadSkills(root: string, home = homedir()): Map<string, Skill> {
   const m = new Map<string, Skill>();
+  for (const p of pluginDirs(root, home)) readDir(join(p, "skills"), "project", m);
   readDir(join(root, ".syok", "skills"), "project", m);
   readDir(join(root, ".claude", "skills"), "project", m);
   readDir(join(home, ".syok", "skills"), "home", m);

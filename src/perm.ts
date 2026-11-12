@@ -1,5 +1,6 @@
 // Permission rules: what the agent may do without asking.
-export type Mode = "ask" | "accept-edits" | "auto";
+export type Mode = "ask" | "accept-edits" | "plan" | "auto";
+export const MODES: Mode[] = ["ask", "accept-edits", "plan", "auto"];
 export const PROTECTED = [/(^|\/)\.git\//, /(^|\/)\.github\/workflows\//, /(^|\/)\.env($|\.)/, /(^|\/)(id_rsa|id_ed25519)/, /\.(pem|key|p12|pfx)$/i];
 export const SECRET_LIKE = /(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|syk_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/;
 // Commands that are never run, in any mode.
@@ -35,11 +36,13 @@ export function checkCommand(cmd: string, s: Settings = {}): "deny" | "safe" | "
   return "other";
 }
 export async function allowEdit(mode: Mode, ask: Asker, rel: string, preview: string) {
+  if (mode === "plan") return false;
   return mode === "ask" ? ask("edit " + rel, preview) : true;
 }
 export async function allowCommand(mode: Mode, ask: Asker, cmd: string, s: Settings) {
   const k = checkCommand(cmd, s);
   if (k === "deny") return { ok: false, why: "That command is blocked by Syok Code's safety rules." };
+  if (mode === "plan") return k === "safe" ? { ok: true, why: "" } : { ok: false, why: "Plan mode: only read-only commands run. Finish with your plan; the user approves it before anything changes." };
   if (mode === "auto" || k === "safe") return { ok: true, why: "" };
   return (await ask("run command", cmd)) ? { ok: true, why: "" } : { ok: false, why: "The user did not allow this command." };
 }
