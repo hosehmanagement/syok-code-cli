@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { currentShell, killTree, spawnCommand } from "./shell.ts";
 
-export const VERSION = "0.5.0";
+export const VERSION = "0.5.1";
 export const DEFAULT_PORT = 8787;
 export const EXEC_DEFAULT_S = 90, EXEC_MAX_S = 300, OUT_CAP = 12_000, BODY_MAX = 100_000, CMD_MAX = 4000, MAX_BUSY = 2;
 
@@ -124,7 +124,7 @@ export async function pair(code: string, base: string, o: { home?: string; env?:
   const st = loadState(o.home);
   let r: Response;
   try {
-    r = await f(base.replace(/\/+$/, "") + "/v1/codespace/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: code.toUpperCase(), url, secret: st.secret, name: env.CODESPACE_NAME || "" }) });
+    r = await f(base.replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/codespace/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: code.toUpperCase(), url, secret: st.secret, name: env.CODESPACE_NAME || "" }) });
   } catch (e: any) { return { ok: false, message: "Could not reach Syok: " + (e?.message || e) }; }
   if (r.status === 404 || r.status === 410) return { ok: false, message: "Syok does not know that code, or it has expired (codes last 10 minutes and work once). Make a new one in Syok." };
   if (r.status === 429) return { ok: false, message: "Too many tries. Wait a minute and try again." };
