@@ -7,7 +7,8 @@ const base = "http://fake";
 const SKILL = parseSkill("---\nname: hello-check\ndescription: print a number\n---\nRun this:\n```bash\nnode -e \"console.log(6*7)\"\n```\n", "hello-check");
 const CMD = 'node -e "console.log(6*7)"';
 const text = (s: string) => ({ role: "assistant", content: s });
-const userMsgs = (seen: any[]) => seen.flatMap((r) => r.messages).filter((m: any) => m.role === "user").map((m: any) => String(m.content));
+// every request repeats the whole history, so only the last one is read (counts each message once)
+const userMsgs = (seen: any[]) => seen[seen.length - 1].messages.filter((m: any) => m.role === "user").map((m: any) => String(m.content));
 
 test("a skill run executes the command itself and reports it", async () => {
   const d = tmpProject({});
