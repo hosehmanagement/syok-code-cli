@@ -126,7 +126,7 @@ export async function addSkill(root: string, src: string, f: typeof fetch = fetc
   } catch (e: any) { return { ok: false, message: "Could not download it: " + (e?.message || e) }; }
   if (text.length > 200_000) return { ok: false, message: "That file is too big to be a skill (over 200 KB)." };
   if (!text.trim()) return { ok: false, message: "That file is empty." };
-  const tail = (local ? src : url).replace(/\/SKILL\.md$/i, "").split(/[\\/]/).pop() || "skill";
+  const tail = (local ? src : url).replace(/[\\/]SKILL\.md$/i, "").split(/[\\/]/).pop() || "skill";
   const sk = parseSkill(text, tail.replace(/\.md$/i, ""));
   const dir = join(root, ".syok", "skills", sk.name);
   mkdirSync(dir, { recursive: true });
