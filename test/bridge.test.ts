@@ -85,8 +85,9 @@ test("exec runs a command and gives back the output and the exit code", async ()
 
 test("exec runs in the folder asked for, inside the root", async () => {
   const root = tmp(); const sub = join(root, "sub"); await Bun.write(join(sub, "marker.txt"), "x");
+  await Bun.write(join(sub, "list.js"), "console.log(require('fs').readdirSync('.').join(' '))");
   const h = mk(root);
-  const j = await (await exec(h, { command: process.platform === "win32" ? "dir /b" : "ls", cwd: "sub" })).json() as any;
+  const j = await (await exec(h, { command: "node list.js", cwd: "sub" })).json() as any;
   expect(j.output).toContain("marker.txt");
   const out = await exec(h, { command: "echo hi", cwd: "../.." });
   expect(out.status).toBe(400); expect(((await out.json()) as any).error).toBe("bad_folder");
