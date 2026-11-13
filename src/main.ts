@@ -21,6 +21,7 @@ import { extractImages } from "./image.ts";
 import { summarizeHistory } from "./compactor.ts";
 import { reviewTask, openPr, realRun } from "./pr.ts";
 import { sandboxCall, sandboxExec } from "./sandbox.ts";
+import { runJobRunner, describeJobs, jobLog, stopJob } from "./jobs.ts";
 
 function arg(n: string, d = "") { const i = process.argv.indexOf(n); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; }
 const has = (n: string) => process.argv.includes(n);
@@ -40,6 +41,9 @@ Skills (instruction files the AI follows, including commands it runs itself):
   syok skills                                  list your skills (.syok/skills, .claude/skills and ~/.syok/skills)
   syok skill add <github-link|owner/repo/path|file>   save a skill into this project
   syok skill <name> "what you want"            run a skill: it shows its commands first, and you still approve each one (or use --mode auto)
+Saved jobs (long scripts that keep running after you exit; the AI starts them with job_start):
+  syok jobs                                    list them          syok logs <n> [--tail 4000]   read the end of the log
+  syok stop <n>                                stop one           (files live in .syok/jobs/<n>/)
 Codespace link (lets the Syok website run commands in your own GitHub Codespace):
   syok bridge                                  start the small command server (a Codespace from the Syok template does this by itself)
   syok pair <code>                             link this Codespace to your Syok account with the one-time code shown in Syok
@@ -64,6 +68,9 @@ Options:
                         auto = run everything except blocked commands
   --profile <name>      tuning profile from profiles.json
   --max-steps <n>       stop after n steps
+  --general             general terminal mode: not only programming (scripts, data, system tasks, automation)
+  --timeout <sec>       default time limit for one command (default 120)
+  --max-timeout <sec>   the most one command may run (default 600, up to 86400); longer work belongs in a saved job
   --no-stream           wait for the full answer instead of showing it as it is written
   --json                print the result as JSON (for tests and scripts)
 Setup: set SYOK_BASE_URL (your Syok address) and SYOK_API_KEY (a syk_ key from Syok > Developer API),
@@ -90,6 +97,16 @@ if (["bridge", "pair", "unpair"].includes(process.argv[2] ?? "")) {
   const { bridgeCommand } = await import("./bridge.ts");
   process.exit(await bridgeCommand(process.argv.slice(2), { base: process.env.SYOK_BASE_URL || readJson(join(homedir(), ".syok", "config.json")).base || "" }));
 }
+if (process.argv[2] === "__jobrun") { process.exit(await runJobRunner(process.argv[3] || "")); } // internal: the runner of a saved job
+if (["jobs", "logs", "stop"].includes(process.argv[2] ?? "")) {
+  // Saved jobs need no API key: they are just files in <project>/.syok/jobs.
+  const here = resolve(arg("--cwd", process.cwd())); const sub1 = process.argv[2]; const rest = process.argv.slice(3).filter((x, i, all) => !x.startsWith("--") && !["--cwd", "--tail"].includes(all[i - 1] ?? ""));
+  if (sub1 === "jobs") console.log(describeJobs(here));
+  else if (!rest[0] || !/^\d+$/.test(rest[0])) { console.error("Use: syok " + sub1 + " <job number>   (syok jobs lists them)"); process.exit(2); }
+  else if (sub1 === "logs") { const t = +arg("--tail", "4000") || 4000; console.log(jobLog(here, +rest[0], t)); }
+  else console.log(stopJob(here, +rest[0]));
+  process.exit(0);
+}
 const cfg = readJson(join(homedir(), ".syok", "config.json"));
 const base = process.env.SYOK_BASE_URL || cfg.base || "", key = process.env.SYOK_API_KEY || cfg.key || "";
 if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok --help"); process.exit(2); }
@@ -98,6 +115,9 @@ let model = arg("--model", "syok-coder"), mode = arg("--mode", "ask") as Mode;
 if (!MODES.includes(mode)) { console.error("Unknown mode. Use one of: " + MODES.join(", ")); process.exit(2); }
 const table = existsSync(join(root, "profiles.json")) ? readJson(join(root, "profiles.json")) : {};
 const settings = pluginSettings(root, readJson(join(root, ".syok", "settings.json")));
+if (has("--general")) settings.general = true;
+if (arg("--timeout")) settings.timeout_sec = +arg("--timeout");
+if (arg("--max-timeout")) settings.max_timeout_sec = +arg("--max-timeout");
 const profile = pickProfile(model, arg("--profile") || undefined, table);
 if (arg("--max-steps")) profile.maxSteps = +arg("--max-steps");
 const rl = process.stdin.isTTY ? createInterface({ input: process.stdin, output: process.stdout }) : null;
@@ -229,7 +249,7 @@ for (;;) {
     continue;
   }
   if (line === "/diff") { const d = sessionDiff(ctx); console.log(d ? colorize(d) : "No changes yet."); continue; }
-  if (line === "/jobs") { console.log(ctx.bg.list()); continue; }
+  if (line === "/jobs") { console.log(ctx.bg.list() + "\nSaved jobs (keep running after you exit):\n" + describeJobs(root)); continue; }
   if (line === "/sessions") { console.log(describeSessions(root)); continue; }
   if (line === "/resume" || line.startsWith("/resume ")) {
     const ref = line.slice(7).trim();

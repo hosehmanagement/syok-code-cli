@@ -81,7 +81,7 @@ export function shellArgs(sh: Shell, command: string): string[] {
 }
 
 /** Start a command line in the right shell. Same options everywhere: own process group (so it can be stopped), hidden window on Windows. */
-export function spawnCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, stdio: Array<"ignore" | "pipe">, sh: Shell = currentShell()): ChildProcess {
+export function spawnCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, stdio: Array<"ignore" | "pipe" | number>, sh: Shell = currentShell()): ChildProcess {
   const win = process.platform === "win32";
   return spawn(sh.exe, shellArgs(sh, command), { cwd, env, detached: !win, windowsHide: true, windowsVerbatimArguments: win && sh.kind === "cmd", stdio });
 }
