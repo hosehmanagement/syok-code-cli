@@ -117,9 +117,13 @@ import (
 
 func TestOrderKept(t *testing.T) {
 	in := []string{"m", "c", "x", "a", "c", "q", "b", "m", "z", "a", "k", "t", "b", "y"}
-	got := Dedupe(in)
-	if !reflect.DeepEqual(got, []string{"m", "c", "x", "a", "q", "b", "z", "k", "t", "y"}) {
-		t.Fatalf("got %v", got)
+	want := []string{"m", "c", "x", "a", "q", "b", "z", "k", "t", "y"}
+	// Go randomises map order, so a map-based version can pass one call by luck (about 1 in 150). Repeat so luck cannot pass.
+	for i := 0; i < 300; i++ {
+		got := Dedupe(in)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("run %d: got %v", i, got)
+		}
 	}
 }
 
