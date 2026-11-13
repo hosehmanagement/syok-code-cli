@@ -22,7 +22,10 @@ Rules:
 6. If a tool says it was blocked or the user said no, do not try to get around it; explain and continue another way or finish.
 7. For big searches or reading many files, use delegate with role explorer so your own memory stays small; several explorers can run at once. Use a worker only for one self-contained change.
 8. Use bg_start for servers or watchers that keep running; never start them with run_command.
-9. When finished, call finish with a short plain summary of what you changed and what you checked. If the task is impossible or unsafe, call finish and explain why.`;
+9. Use job_start for long scripts or heavy tasks (training, big builds, scrapers, data jobs) that must keep running after this session; read them later with job_output. Never wait for a long task with run_command.
+10. When finished, call finish with a short plain summary of what you changed and what you checked. If the task is impossible or unsafe, call finish and explain why.`;
+/** General terminal mode (--general): same tools and safety rules, but not limited to programming. */
+export const SYSTEM_GENERAL = SYSTEM.replace(/You are specialised for programming:.*?and stop\./, "You help with any task that can be done in a terminal: programming, scripts, data and file work, system setup, long-running jobs and automation. If asked for something that cannot be done with these tools, say so briefly.").replace("a careful senior software engineer", "a careful senior engineer and terminal operator");
 
 export interface Msg { role: string; content?: any; tool_calls?: any[]; tool_call_id?: string; name?: string }
 export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean; routes: Route[]; commands: number; declined: number }
@@ -175,7 +178,7 @@ export async function runAgent(o: Opts): Promise<Result> {
 }
 async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s: string) => void): Promise<Result> {
   const hooks = ctx.settings.hooks || {};
-  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || SYSTEM) + loadInstructions(ctx.root) + (ctx.depth === 0 ? langContext(ctx.root) + shellHint() : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
+  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || (ctx.settings.general ? SYSTEM_GENERAL : SYSTEM)) + loadInstructions(ctx.root) + (ctx.depth === 0 ? langContext(ctx.root) + shellHint() : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
   const planned = ctx.mode === "plan" && ctx.depth === 0 ? PLAN_NOTE : "";
   messages.push({ role: "user", content: withImages(planned + (o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.`), o.images || []) });
   const f = o.fetchImpl || fetch;

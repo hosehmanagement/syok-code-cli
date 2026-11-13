@@ -25,7 +25,11 @@ export const SAFE = [
   /^(npm|pnpm|yarn|bun) (test|run (test|build|lint|check|typecheck))\b/, /^(npx |bunx )?(tsc|eslint|prettier --check)\b/,
   /^(pytest|python3? -m (pytest|unittest)|go test|cargo (test|build|check)|node --test|make (test|check|build))\b/,
 ];
-export interface Settings { allow?: string[]; deny?: string[]; hooks?: Record<string, Array<{ match?: string; command: string; timeout_sec?: number }>>; mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> }
+export interface Settings { allow?: string[]; deny?: string[];
+  /** run_command: default seconds (120) and the most the AI may ask for (600). Hard ceiling 24 hours. */
+  timeout_sec?: number; max_timeout_sec?: number;
+  /** General terminal mode: not only programming. */
+  general?: boolean; hooks?: Record<string, Array<{ match?: string; command: string; timeout_sec?: number }>>; mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> }
 export type Asker = (what: string, detail: string) => Promise<boolean>;
 export function isProtected(rel: string): boolean { return PROTECTED.some((r) => r.test(rel.replace(/\\/g, "/"))); }
 export function checkCommand(cmd: string, s: Settings = {}): "deny" | "safe" | "other" {

@@ -6,6 +6,15 @@ import { isProtected, SECRET_LIKE, allowEdit, allowCommand, type Mode, type Aske
 import type { Profile } from "./profiles.ts";
 import { unifiedDiff } from "./diff.ts";
 import { Bg } from "./bg.ts";
+import { startJob, jobLog, stopJob, describeJobs } from "./jobs.ts";
+
+/** Seconds a run_command may take: the AI's request, limited by the user's settings (default max 10 minutes, hard ceiling 24 hours). */
+export function commandTimeout(s: Settings, asked?: number): number {
+  const envMax = Number(process.env.SYOK_MAX_TIMEOUT) || 0;
+  const cap = Math.min(86400, Math.max(5, s.max_timeout_sec || envMax || 600));
+  const def = Math.min(cap, Math.max(5, s.timeout_sec || 120));
+  return Math.min(cap, Math.max(5, asked || def));
+}
 import type { McpClient } from "./mcp.ts";
 
 const SKIP = new Set([".git", "node_modules", ".venv", "__pycache__", "dist", "build", ".next", "target"]);
@@ -17,10 +26,13 @@ export const TOOLS = [
   fn("find_files", "Find files by name pattern, for example '**/*.test.js'.", { pattern: { type: "string" } }, ["pattern"]),
   fn("edit_file", "Replace text in an existing file. old_text must match exactly and be unique (add surrounding lines if not). Set replace_all to change every match.", { path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" }, replace_all: { type: "boolean" } }, ["path", "old_text", "new_text"]),
   fn("write_file", "Create a new file or fully replace a file with new content.", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
-  fn("run_command", "Run a shell command in the project root (tests, build, git status...). Output is cut if long. timeout_sec defaults to 120.", { command: { type: "string" }, timeout_sec: { type: "integer" } }, ["command"]),
+  fn("run_command", "Run a shell command in the project root (tests, build, git status...). Output is cut if long. timeout_sec defaults to 120 (the user can change the default and the maximum). For anything that may run longer than a few minutes use job_start instead.",{ command: { type: "string" }, timeout_sec: { type: "integer" } }, ["command"]),
   fn("bg_start", "Start a long-running command in the background (dev server, watcher). Returns a job id. Use bg_output to read it and bg_stop to stop it.", { command: { type: "string" } }, ["command"]),
   fn("bg_output", "Read the latest output of a background job. Without id, lists all jobs.", { id: { type: "integer" } }, []),
   fn("bg_stop", "Stop a background job.", { id: { type: "integer" } }, ["id"]),
+  fn("job_start", "Start a long script or heavy task that must KEEP RUNNING even after Syok Code exits (training, a big build, a scraper, a data job). Output goes to a log file in .syok/jobs. Returns a job id. Check it later with job_output (also in a new session) and stop it with job_stop. max_minutes is optional (0 = no limit). Use bg_start instead for a dev server you only need during this session.", { command: { type: "string" }, max_minutes: { type: "number" } }, ["command"]),
+  fn("job_output", "Read the end of a saved job's log and whether it is still running or finished (with its exit code). Without id, lists all saved jobs. Optional tail = how many characters of the log to show (default 4000).", { id: { type: "integer" }, tail: { type: "integer" } }, []),
+  fn("job_stop", "Stop a saved job (and everything it started).", { id: { type: "integer" } }, ["id"]),
   fn("delegate", "Hand a sub-task to a helper with a fresh, empty context so it does not fill your memory. role 'explorer' (default) is read-only: use it to search or read a lot and get a short answer; several explorers in one message run in parallel. role 'worker' may edit files and run commands; use it for one self-contained change. Give a complete, specific task.", { task: { type: "string" }, role: { type: "string", enum: ["explorer", "worker"] } }, ["task"]),
   fn("finish", "Call when the task is done (or cannot be done). Give a short plain summary.", { summary: { type: "string" } }, ["summary"]),
 ];
@@ -163,7 +175,7 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
         if (!p.ok) { c.ran.declined++; return "Not run. " + p.why; }
         c.ran.commands++;
         if (/\b(test|pytest|unittest|jest|vitest|go test|cargo test|check)\b/.test(cmd)) c.ran.tests = true;
-        const secs = Math.min(600, Math.max(5, a.timeout_sec || 120));
+        const secs = commandTimeout(c.settings, a.timeout_sec);
         return c.sandbox ? await c.sandbox(cmd, secs) : await sh(c, cmd, secs);
       }
       case "bg_start": {
@@ -175,6 +187,18 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
         await new Promise((ok) => setTimeout(ok, 700));
         return `Started background job ${id}. Output so far:\n` + c.bg.output(id, 1500);
       }
+      case "job_start": {
+        const cmd = String(a.command || "");
+        const p = await allowCommand(c.mode, c.ask, cmd, c.settings);
+        if (!p.ok) { c.ran.declined++; return "Not run. " + p.why; }
+        c.ran.commands++;
+        const mins = Math.max(0, Number(a.max_minutes) || 0);
+        const id = startJob(c.root, cmd, Math.round(mins * 60));
+        await new Promise((ok) => setTimeout(ok, 700));
+        return `Started saved job ${id}. It keeps running even if Syok Code exits. Log: .syok/jobs/${id}/out.log. Output so far:\n` + jobLog(c.root, id, 1500);
+      }
+      case "job_output": return a.id == null ? describeJobs(c.root) : jobLog(c.root, +a.id, a.tail || 4000);
+      case "job_stop": return stopJob(c.root, +a.id);
       case "bg_output": return a.id == null ? c.bg.list() : c.bg.output(+a.id, 4000);
       case "bg_stop": return c.bg.stop(+a.id);
       case "delegate": return "Error: delegate only works in the main agent loop.";
