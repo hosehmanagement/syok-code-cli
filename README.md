@@ -2,15 +2,21 @@
 
 Syok Code for your own computer: an AI coding agent that reads your project, edits files, runs your tests and fixes what it broke. It talks to **your own Syok AI key**, so automatic key switching (when one provider hits a limit) keeps working in the middle of a long task.
 
-Status: early (v0.3). Built for computers that are fast and stable.
+Status: early (v0.8). Built for computers that are fast and stable.
 
 ## Quick start
-1. Download the program for your system from the Releases page (or Actions > build programs > artifacts).
+1. Install (one line; you do not need to install anything else first):
+   - Mac/Linux: `curl -fsSL https://syok-ai.com/syok-code/install.sh | sh`
+   - Windows (PowerShell): `irm https://syok-ai.com/syok-code/install.ps1 | iex`
+
+   Everything goes into the `.syok` folder in your home folder: a private copy of the Bun runtime, the one-file program and the `syok` command. Both downloads are checked against their published checksums. Run the same line again, or `syok update`, to get the newest version.
 2. In Syok AI open **Developer API**, make a key (starts with `syk_`) and note your Syok address.
 3. In your project folder run:
-   - Mac/Linux: `SYOK_BASE_URL=https://your-address SYOK_API_KEY=syk_... ./syok`
-   - Windows (PowerShell): `$env:SYOK_BASE_URL="https://your-address"; $env:SYOK_API_KEY="syk_..."; .\syok.exe`
+   - Mac/Linux: `SYOK_BASE_URL=https://your-address SYOK_API_KEY=syk_... syok`
+   - Windows (PowerShell): `$env:SYOK_BASE_URL="https://your-address"; $env:SYOK_API_KEY="syk_..."; syok`
 4. Type what you want. Examples: `fix the failing test`, `add a --verbose flag`.
+
+Other ways to get it: if you already have Bun, download `syok.js` and run `bun syok.js`. Self-contained programs (no runtime folder) are built by Actions > build programs.
 
 Run one task and exit: `syok -p "fix the failing test" --mode accept-edits`
 
