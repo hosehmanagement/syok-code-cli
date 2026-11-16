@@ -1,0 +1,31 @@
+name: modal live test
+# Runs the real "syok run --on modal" path against Modal. Needs two repository secrets: MODAL_TOKEN_ID and MODAL_TOKEN_SECRET.
+# Costs a few cents of that Modal account's credit per run (CPU only, about two minutes). Runs by hand, and on pull requests that change the remote-run code.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['src/remote*.ts', 'test/live/**', '.github/workflows/modal-live.yml', 'package.json', 'bun.lock']
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Control check with Modal's own Python tool (same secrets)
+        # Tells a wrong token apart from a fault in Syok Code: if Modal's own tool is refused too, the saved token is the problem.
+        if: always()
+        continue-on-error: true
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          if [ -z "$MODAL_TOKEN_ID" ]; then echo "CONTROL: skipped, no secrets"; exit 0; fi
+          pip install --quiet modal
+          if modal app list > /tmp/modal-control.txt 2>&1; then echo "CONTROL: Modal's own tool ACCEPTED this token"; else echo "CONTROL: Modal's own tool REFUSED this token"; tail -n 5 /tmp/modal-control.txt | cut -c1-200; fi
+      - name: Live test (skips itself when the secrets are not set)
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: bun test/live/modal-live.ts

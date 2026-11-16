@@ -8,7 +8,7 @@ export async function sandboxCall(cfg: SandboxCfg, path: string, body?: any): Pr
   return { ok: r.ok, status: r.status, data };
 }
 export async function sandboxExec(cfg: SandboxCfg, command: string, secs: number): Promise<string> {
-  const r = await sandboxCall(cfg, "exec", { command, timeout: Math.min(90, secs) });
+  const r = await sandboxCall(cfg, "exec", { cmd: command, command, timeout: Math.min(90, secs) });
   if (!r.ok) return "Error: the sandbox said HTTP " + r.status + ": " + String(r.data?.error?.message || r.data?.error || JSON.stringify(r.data) || "").slice(0, 300) + " (start one with: syok sandbox start owner/repo)";
   const d = r.data || {};
   const out = String(d.output ?? d.result ?? "");
