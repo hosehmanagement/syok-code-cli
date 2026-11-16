@@ -24,6 +24,11 @@ function box(sb: any): Box {
     terminate: async () => { await sb.terminate(); },
   };
 }
+/** What the two token values look like, without showing them: used to explain a refused token. */
+export function tokenShape(env: Record<string, string | undefined> = process.env): string {
+  const one = (name: string, prefix: string) => { const raw = env[name] ?? "", v = raw.trim(); return !v ? `${name} is empty` : `${name} ${v.startsWith(prefix) ? "starts with " + prefix : "does NOT start with " + prefix + " (it should)"}, ${v.length} characters${raw !== v ? ", had spaces or a line break around it" : ""}${/\s/.test(v) ? ", contains a space or line break inside" : ""}`; };
+  return one("MODAL_TOKEN_ID", "ak-") + "; " + one("MODAL_TOKEN_SECRET", "as-");
+}
 export function modalHasToken(env: Record<string, string | undefined> = process.env, home = homedir()): boolean {
   return !!(env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET) || existsSync(env.MODAL_CONFIG_PATH || join(home, ".modal.toml"));
 }
@@ -40,14 +45,16 @@ export const MODAL_SETUP = [
 /** Modal's error messages in plain words. */
 export function friendly(e: any): Error {
   const m = String(e?.message || e);
-  if (/UNAUTHENTICATED|Token not found|invalid token|PERMISSION_DENIED/i.test(m)) return new Error("Modal did not accept your token. Check MODAL_TOKEN_ID and MODAL_TOKEN_SECRET (Modal, Settings, API Tokens), then try again.\n(Modal said: " + m.slice(0, 200) + ")");
+  if (/UNAUTHENTICATED|Token not found|invalid token|PERMISSION_DENIED/i.test(m)) return new Error("Modal did not accept your token. Check MODAL_TOKEN_ID and MODAL_TOKEN_SECRET (Modal, Settings, API Tokens), then try again.\n(What was sent: " + tokenShape() + ")\n(Modal said: " + m.slice(0, 200) + ")");
   if (/RESOURCE_EXHAUSTED|billing|payment|spending limit|credit/i.test(m)) return new Error("Modal refused to start the computer: your account's credit or spending limit may be used up. Check Modal, Settings, Usage and Billing.\n(Modal said: " + m.slice(0, 200) + ")");
   if (/image|registry|manifest|pull/i.test(m) && /not found|failed|unauthorized|denied/i.test(m)) return new Error("Modal could not get that container image. Check the --image name.\n(Modal said: " + m.slice(0, 200) + ")");
   return e instanceof Error ? e : new Error(m);
 }
 export function modalProvider(load: () => Promise<any> = () => import("modal")): Provider {
   let client: any = null;
-  const get = async () => (client ||= new (await load()).ModalClient());
+  // Tokens pasted with a stray space or line break are a common mistake, so they are trimmed before use.
+  const tok = () => { const id = (process.env.MODAL_TOKEN_ID || "").trim(), secret = (process.env.MODAL_TOKEN_SECRET || "").trim(); return id && secret ? { tokenId: id, tokenSecret: secret } : {}; };
+  const get = async () => (client ||= new (await load()).ModalClient(tok()));
   return {
     name: "Modal",
     problem: async () => (modalHasToken() ? null : MODAL_SETUP),

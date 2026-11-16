@@ -1,7 +1,7 @@
 // The Modal adapter against a stand-in for Modal's SDK (same method names and shapes as modal@0.11.1's types).
 // The real service is exercised by test/live/modal-live.ts (run by the "modal live test" workflow when Modal tokens are set).
 import { test, expect } from "bun:test";
-import { modalProvider } from "../src/remote-modal.ts";
+import { modalProvider, tokenShape, friendly } from "../src/remote-modal.ts";
 
 const stream = (parts: string[]) => new ReadableStream<string>({ start(c) { for (const p of parts) c.enqueue(p); c.close(); } });
 function fakeSdk() {
@@ -52,4 +52,18 @@ test("Modal adapter: no GPU or sizes asked means none are sent; attach finds a s
   expect(sdk.calls[2][3]).toEqual({ timeoutMs: 60000 });
   const b = await p.attach("sb-old"); expect(b.id).toBe("sb-old"); expect(sdk.calls.at(-1)).toEqual(["sandboxes.fromId", "sb-old"]);
   p.close(); p.close(); expect(sdk.calls.filter((c) => c[0] === "close").length).toBe(1);
+});
+
+test("a refused token is explained by its shape, never by its value; pasted spaces are trimmed", async () => {
+  expect(tokenShape({ MODAL_TOKEN_ID: "ak-abc123", MODAL_TOKEN_SECRET: "as-xyz" })).toBe("MODAL_TOKEN_ID starts with ak-, 9 characters; MODAL_TOKEN_SECRET starts with as-, 6 characters");
+  expect(tokenShape({ MODAL_TOKEN_ID: " as-swapped\n", MODAL_TOKEN_SECRET: "" })).toBe("MODAL_TOKEN_ID does NOT start with ak- (it should), 10 characters, had spaces or a line break around it; MODAL_TOKEN_SECRET is empty");
+  const old = { id: process.env.MODAL_TOKEN_ID, s: process.env.MODAL_TOKEN_SECRET };
+  process.env.MODAL_TOKEN_ID = "  ak-SECRETVALUE1\n"; process.env.MODAL_TOKEN_SECRET = "as-SECRETVALUE2 ";
+  try {
+    const msg = friendly(new Error("UNAUTHENTICATED: Token not found")).message;
+    expect(msg).toContain("starts with ak-, 15 characters, had spaces"); expect(msg).not.toContain("SECRETVALUE");
+    let got: any = null; class ModalClient { constructor(p: any) { got = p; } apps = { fromName: async () => ({}) }; images = { fromRegistry: () => ({}) }; sandboxes = { create: async () => ({ sandboxId: "x", setTags: async () => {} }) }; close() {} }
+    await modalProvider(async () => ({ ModalClient })).create({ image: "a", timeoutMs: 1 });
+    expect(got).toEqual({ tokenId: "ak-SECRETVALUE1", tokenSecret: "as-SECRETVALUE2" });
+  } finally { if (old.id === undefined) delete process.env.MODAL_TOKEN_ID; else process.env.MODAL_TOKEN_ID = old.id; if (old.s === undefined) delete process.env.MODAL_TOKEN_SECRET; else process.env.MODAL_TOKEN_SECRET = old.s; }
 });
