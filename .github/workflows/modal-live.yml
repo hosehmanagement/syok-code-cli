@@ -29,3 +29,13 @@ jobs:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: bun test/live/modal-live.ts
+      - name: Live test of the one-file program, with the build folders moved away
+        # Users install one file. This proves that file works by itself against the real service.
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          bun build src/main.ts --target=bun --minify --outfile "$RUNNER_TEMP/syok.js"
+          cp test/live/bundle-live.sh "$RUNNER_TEMP/bundle-live.sh"
+          mv node_modules "$RUNNER_TEMP/node_modules-moved-away"
+          sh "$RUNNER_TEMP/bundle-live.sh" "$RUNNER_TEMP/syok.js"
