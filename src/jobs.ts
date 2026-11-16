@@ -24,6 +24,12 @@ function killPid(pid: number | null) {
 }
 
 /** Start a command that survives this program exiting. maxSec 0 = no time limit. */
+/** How to start this same program again. A compiled program (no Bun installed) is its own file, so it needs no script path. */
+export function selfArgs(argv1: string, entry?: string): string[] {
+  if (entry) return [entry];
+  return /^(\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/.test(argv1) ? [] : [argv1];
+}
+
 export function startJob(root: string, cmd: string, maxSec = 0): number {
   mkdirSync(jobsDir(root), { recursive: true });
   const ids = readdirSync(jobsDir(root)).map((n) => parseInt(n, 10)).filter(Number.isFinite);
@@ -33,7 +39,7 @@ export function startJob(root: string, cmd: string, maxSec = 0): number {
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
   writeFileSync(join(dir, "out.log"), "");
   // The runner is this same program started again. SYOK_ENTRY names the program file when it is not the one that is running (tests, embedding).
-  const runner = spawn(process.execPath, [process.env.SYOK_ENTRY || process.argv[1], "__jobrun", dir], { detached: process.platform !== "win32", stdio: "ignore", windowsHide: true });
+  const runner = spawn(process.execPath, [...selfArgs(process.argv[1] || "", process.env.SYOK_ENTRY), "__jobrun", dir], { detached: process.platform !== "win32", stdio: "ignore", windowsHide: true });
   runner.unref();
   meta.runner = runner.pid || 0;
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));

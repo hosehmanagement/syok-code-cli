@@ -34,3 +34,53 @@ jobs:
       - name: Every test on Windows (information only)
         continue-on-error: true
         run: bun test ./test
+  # The one-line installers are run for real on Linux, Mac and Windows against a freshly built program.
+  installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Build the program and serve it on this machine
+        shell: bash
+        run: |
+          mkdir -p site
+          bun build src/main.ts --target=bun --minify --outfile site/syok.js
+          bun -e "const b=require('fs').readFileSync('site/syok.js');require('fs').writeFileSync('site/syok.js.sha256',require('crypto').createHash('sha256').update(b).digest('hex')+'  syok.js\n')"
+          nohup bun -e "Bun.serve({port:8765,hostname:'127.0.0.1',fetch:(r)=>{const f=Bun.file('site'+new URL(r.url).pathname);return f.exists().then(e=>e?new Response(f):new Response('no',{status:404}))}})" > server.log 2>&1 &
+          sleep 2; curl -fsS http://127.0.0.1:8765/syok.js.sha256
+      - name: Install twice, then use it (Mac and Linux)
+        if: runner.os != 'Windows'
+        env:
+          SYOK_SITE: http://127.0.0.1:8765
+          SYOK_HOME: ${{ runner.temp }}/syokhome
+        run: |
+          sh install/install.sh
+          sh install/install.sh
+          "$SYOK_HOME/bin/syok" --help | head -n 3
+          "$SYOK_HOME/bin/syok" jobs | grep "No saved jobs"
+          "$SYOK_HOME/bin/syok" update | grep "up to date"
+          echo damaged >> site/syok.js
+          if sh install/install.sh; then echo "a damaged download was accepted"; exit 1; fi
+          "$SYOK_HOME/bin/syok" jobs | grep "No saved jobs"
+      - name: Install twice, then use it (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          SYOK_SITE: http://127.0.0.1:8765
+          SYOK_HOME: ${{ runner.temp }}\syokhome
+        run: |
+          $before = [Environment]::GetEnvironmentVariable('Path','User')
+          Get-Content -Raw install/install.ps1 | Invoke-Expression
+          Get-Content -Raw install/install.ps1 | Invoke-Expression
+          & "$env:SYOK_HOME\bin\syok.cmd" --help | Select-Object -First 3
+          $j = & "$env:SYOK_HOME\bin\syok.cmd" jobs; if ("$j" -notmatch 'No saved jobs') { throw "jobs: $j" }
+          $u = & "$env:SYOK_HOME\bin\syok.cmd" update; if ("$u" -notmatch 'up to date') { throw "update: $u" }
+          $p = [Environment]::GetEnvironmentVariable('Path','User'); if (($p -split ';' | Where-Object { $_ -eq "$env:SYOK_HOME\bin" }).Count -ne 1) { throw "PATH entry count wrong: $p" }
+          Add-Content site/syok.js 'damaged'
+          $failed = $false; try { Get-Content -Raw install/install.ps1 | Invoke-Expression } catch { $failed = $true }
+          if (-not $failed) { throw 'a damaged download was accepted' }
+          $j = & "$env:SYOK_HOME\bin\syok.cmd" jobs; if ("$j" -notmatch 'No saved jobs') { throw "after failed update: $j" }

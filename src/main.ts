@@ -22,6 +22,7 @@ import { summarizeHistory } from "./compactor.ts";
 import { reviewTask, openPr, realRun } from "./pr.ts";
 import { sandboxCall, sandboxExec } from "./sandbox.ts";
 import { runJobRunner, describeJobs, jobLog, stopJob } from "./jobs.ts";
+import { selfUpdate, sha256 } from "./update.ts";
 
 function arg(n: string, d = "") { const i = process.argv.indexOf(n); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; }
 const has = (n: string) => process.argv.includes(n);
@@ -41,6 +42,8 @@ Skills (instruction files the AI follows, including commands it runs itself):
   syok skills                                  list your skills (.syok/skills, .claude/skills and ~/.syok/skills)
   syok skill add <github-link|owner/repo/path|file>   save a skill into this project
   syok skill <name> "what you want"            run a skill: it shows its commands first, and you still approve each one (or use --mode auto)
+Updating:
+  syok update                                  get the newest Syok Code (checked before it replaces anything)
 Saved jobs (long scripts that keep running after you exit; the AI starts them with job_start):
   syok jobs                                    list them          syok logs <n> [--tail 4000]   read the end of the log
   syok stop <n>                                stop one           (files live in .syok/jobs/<n>/)
@@ -98,6 +101,11 @@ if (["bridge", "pair", "unpair"].includes(process.argv[2] ?? "")) {
   process.exit(await bridgeCommand(process.argv.slice(2), { base: process.env.SYOK_BASE_URL || readJson(join(homedir(), ".syok", "config.json")).base || "" }));
 }
 if (process.argv[2] === "__jobrun") { process.exit(await runJobRunner(process.argv[3] || "")); } // internal: the runner of a saved job
+if (process.argv[2] === "update") {
+  // Needs no API key. Replaces the installed one-file program after checking the download.
+  const self = process.argv[1] || ""; let current = ""; try { current = sha256(readFileSync(self)); } catch {}
+  const r = await selfUpdate({ self, current }); (r.ok ? console.log : console.error)(r.message); process.exit(r.ok ? 0 : 1);
+}
 if (["jobs", "logs", "stop"].includes(process.argv[2] ?? "")) {
   // Saved jobs need no API key: they are just files in <project>/.syok/jobs.
   const here = resolve(arg("--cwd", process.cwd())); const sub1 = process.argv[2]; const rest = process.argv.slice(3).filter((x, i, all) => !x.startsWith("--") && !["--cwd", "--tail"].includes(all[i - 1] ?? ""));
