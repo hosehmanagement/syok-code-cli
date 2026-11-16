@@ -13,6 +13,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - name: Control check with Modal's own Python tool (same secrets)
+        # Tells a wrong token apart from a fault in Syok Code: if Modal's own tool is refused too, the saved token is the problem.
+        if: always()
+        continue-on-error: true
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          if [ -z "$MODAL_TOKEN_ID" ]; then echo "CONTROL: skipped, no secrets"; exit 0; fi
+          pip install --quiet modal
+          if modal app list > /tmp/modal-control.txt 2>&1; then echo "CONTROL: Modal's own tool ACCEPTED this token"; else echo "CONTROL: Modal's own tool REFUSED this token"; tail -n 5 /tmp/modal-control.txt | cut -c1-200; fi
       - name: Live test (skips itself when the secrets are not set)
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
