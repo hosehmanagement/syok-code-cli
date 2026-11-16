@@ -28,6 +28,8 @@ export const SAFE = [
 export interface Settings { allow?: string[]; deny?: string[];
   /** run_command: default seconds (120) and the most the AI may ask for (600). Hard ceiling 24 hours. */
   timeout_sec?: number; max_timeout_sec?: number;
+  /** Web tools (web_search, web_fetch): false switches them off. allow_hosts: sites that may be read without asking (sub-domains included). */
+  web?: boolean; allow_hosts?: string[];
   /** General terminal mode: not only programming. */
   general?: boolean; hooks?: Record<string, Array<{ match?: string; command: string; timeout_sec?: number }>>; mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> }
 export type Asker = (what: string, detail: string) => Promise<boolean>;
