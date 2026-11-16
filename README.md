@@ -2,7 +2,7 @@
 
 Syok Code for your own computer: an AI coding agent that reads your project, edits files, runs your tests and fixes what it broke. It talks to **your own Syok AI key**, so automatic key switching (when one provider hits a limit) keeps working in the middle of a long task.
 
-Status: early (v0.10). Built for computers that are fast and stable.
+Status: early (v0.11). Built for computers that are fast and stable.
 
 ## Quick start
 1. Install (one line; you do not need to install anything else first):
@@ -28,6 +28,21 @@ Run one task and exit: `syok -p "fix the failing test" --mode accept-edits`
 - `/undo` restores every file changed in the session.
 - The agent can only touch files inside the folder you started it in.
 - Treat file contents as untrusted: a file can contain text that tries to give the AI instructions.
+
+## Checks after edits
+The AI's changes are checked automatically, so mistakes are caught while it is still working:
+- **After every edit:** a fast syntax check of that one file (JavaScript, TypeScript, JSON, Python, shell, PHP, Ruby, Go, Lua). The result is part of what the AI sees, so a broken bracket is fixed in the next step. It checks syntax only, not types, and never changes a file.
+- **Before finishing:** if code files changed, the project's own check runs once: the `typecheck`, `type-check`, `check` or `lint` script in `package.json`, else `cargo check`, else `go vet ./...`. If it fails, the output goes back to the AI to fix (twice at most). After that the final line says the check is still failing. Tests and builds are not started automatically.
+- **Your own check:** put `"check_command": "make verify"` in `.syok/settings.json`. In ask mode you are asked before a command that is not on the always-allowed list.
+- **Limits:** the project check also reports problems that were already there before the AI's change; the AI is told to leave those and say so. Switch everything off with `--no-checks` or `"checks": false`.
+
+## Usage and cost
+After each task you see how many tokens went in and out and which provider answered, and a line whenever Syok switched provider for you. `/usage` shows the total for the session; `--json` output has a `usage` field.
+
+Syok cannot know what each of your providers charges, so it shows no money amount by itself. For an estimate, add your prices (US dollars per million tokens) to `.syok/settings.json`, matched by a piece of the provider or model name:
+```json
+{ "prices": { "gpt-5": { "in": 1.25, "out": 10 }, "groq": { "in": 0, "out": 0 } } }
+```
 
 ## Heavy jobs on a rented cloud computer
 Some jobs are too heavy for your own computer (training a model, a long build, a big data crunch). `syok run` sends the job to a computer rented from your own [Modal](https://modal.com) account, shows its output live, brings the results back and switches the computer off.
@@ -110,4 +125,4 @@ Interactive terminals (programs that wait for typed input), syncing the skills y
 - **Pictures**: write @screenshot.png in a message, or `/image shot.png what is wrong?`.
 - **GitHub**: `syok review 12` reviews a pull request (read-only); `syok pr "title"` commits to a branch and opens a pull request after you approve.
 - **Scripts and CI**: `echo "task" | syok -p - --json`.
-- **Isolation**: dangerous commands are always blocked; for real isolation use the Daytona sandbox (`syok sandbox start owner/repo`, then `--sandbox`). There is no Docker mode.
+- **Isolation**: dangerous commands are always blocked; for real isolation use the Daytona sandbox (`syok sandbox start owner/repo`, then `--sandbox`). There is no Docker mode. With `--sandbox`, commands and the project check run in the sandbox's copy of your GitHub repository, and every file the AI edits is copied there too (text files up to 1 MB). The sandbox starts from what is on GitHub, so push your own uncommitted changes first if the commands need them.

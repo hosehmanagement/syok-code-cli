@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { toolDefs, makeCtx, runTool, undoAll, READONLY, type Ctx } from "./tools.ts";
+import { toolDefs, makeCtx, runTool, undoAll, READONLY, runCheckCommand, commandTimeout, type Ctx } from "./tools.ts";
+import { projectCheck, worthChecking } from "./checks.ts";
+import { allowCommand } from "./perm.ts";
 import { runHooks } from "./hooks.ts";
 import { startMcp } from "./mcp.ts";
 import { langContext } from "./langs.ts";
@@ -17,7 +19,7 @@ Rules:
 1. Explore first (list_files, search, find_files, read_file). Never guess file contents.
 2. Make the smallest change that fully solves the task. Match the existing style. Do not reformat unrelated code.
 3. Use edit_file for changes to existing files (old_text must be exact and unique). Use write_file only for new files.
-4. After changing code, run the project's tests or build with run_command and fix failures you caused. If there are no tests, run a quick check or say so.
+4. After changing code, run the project's tests or build with run_command and fix failures you caused. If there are no tests, run a quick check or say so. Every edit is followed by an automatic syntax check of that file, shown in the tool result: if it says FAILED, fix that first.
 5. Never write secrets, tokens or keys into files. Do not touch .git, .env or .github/workflows.
 6. If a tool says it was blocked or the user said no, do not try to get around it; explain and continue another way or finish.
 7. For big searches or reading many files, use delegate with role explorer so your own memory stays small; several explorers can run at once. Use a worker only for one self-contained change.
@@ -29,7 +31,41 @@ Rules:
 export const SYSTEM_GENERAL = SYSTEM.replace(/You are specialised for programming:.*?and stop\./, "You help with any task that can be done in a terminal: programming, scripts, data and file work, system setup, long-running jobs and automation. If asked for something that cannot be done with these tools, say so briefly.").replace("a careful senior software engineer", "a careful senior engineer and terminal operator");
 
 export interface Msg { role: string; content?: any; tool_calls?: any[]; tool_call_id?: string; name?: string }
-export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean; routes: Route[]; commands: number; declined: number }
+export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean; routes: Route[]; commands: number; declined: number; usage: Usage; check?: { command: string; passed: boolean | null } }
+/** What one run used: tokens sent (input) and written (output), and how many steps each provider answered. */
+export interface Usage { input: number; output: number; total: number; steps: number; by: Record<string, { steps: number; input: number; output: number }> }
+export const emptyUsage = (): Usage => ({ input: 0, output: 0, total: 0, steps: 0, by: {} });
+export function addUsage(u: Usage, usage: any, route?: Route): void {
+  const input = Number(usage?.prompt_tokens) || 0, output = Number(usage?.completion_tokens) || 0, total = Number(usage?.total_tokens) || input + output;
+  u.input += input; u.output += output; u.total += total; u.steps++;
+  const name = route && (route.provider || route.model) ? [route.provider, route.model].filter(Boolean).join(" / ") : "";
+  if (name) { const b = (u.by[name] ||= { steps: 0, input: 0, output: 0 }); b.steps++; b.input += input; b.output += output; }
+}
+export function mergeUsage(into: Usage, from: Usage): void {
+  into.input += from.input; into.output += from.output; into.total += from.total; into.steps += from.steps;
+  for (const [k, v] of Object.entries(from.by)) { const b = (into.by[k] ||= { steps: 0, input: 0, output: 0 }); b.steps += v.steps; b.input += v.input; b.output += v.output; }
+}
+const fmt = (n: number) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(2) + "M" : n >= 10_000 ? Math.round(n / 1000) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n));
+/** Estimated cost in US dollars, only when the user gave prices in settings (Syok cannot know each provider's price). */
+export function estimateCost(u: Usage, prices?: Record<string, { in?: number; out?: number }>): number | null {
+  if (!prices || !Object.keys(prices).length) return null;
+  let cost = 0, matched = false;
+  for (const [name, b] of Object.entries(u.by)) {
+    const key = Object.keys(prices).sort((a, c) => c.length - a.length).find((k) => name.toLowerCase().includes(k.toLowerCase()));
+    if (!key) continue; matched = true;
+    cost += (b.input * (Number(prices[key].in) || 0) + b.output * (Number(prices[key].out) || 0)) / 1_000_000;
+  }
+  return matched ? cost : null;
+}
+/** One or more lines for people: tokens in and out, who answered, switches between providers, estimated cost. */
+export function describeUsage(u: Usage, prices?: Record<string, { in?: number; out?: number }>): string {
+  if (!u.steps) return "Nothing used yet.";
+  const split = u.input || u.output ? `${fmt(u.input)} tokens in, ${fmt(u.output)} out` : `${fmt(u.total)} tokens`;
+  const names = Object.entries(u.by).sort((a, b) => b[1].steps - a[1].steps);
+  const who = names.length ? "; answered by " + names.map(([k, v]) => `${k} (${v.steps} step${v.steps === 1 ? "" : "s"})`).join(", ") : "";
+  const cost = estimateCost(u, prices);
+  return `${u.steps} AI call${u.steps === 1 ? "" : "s"}, ${split}${who}${cost === null ? "" : `; about $${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)} at your listed prices`}`;
+}
 /** Which provider answered one step, and what the failed attempts before it said (from the X-Syok-* reply headers). */
 export interface Route { provider: string; model: string; attempts: string; details: string }
 export interface Opts {
@@ -125,9 +161,10 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
       const payload = onToken ? { ...body, stream: true, stream_options: { include_usage: true } } : body;
       const r = await f(chatUrl(base), { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body: JSON.stringify(payload), signal });
       if (r.ok) {
-        if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) return await readSSE(r.body, (s) => { emitted = true; onToken(s); });
+        const route = { provider: r.headers.get("x-syok-provider") || "", model: r.headers.get("x-syok-model") || "", attempts: r.headers.get("x-syok-attempts") || "", details: r.headers.get("x-syok-attempt-details") || "" };
+        if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) { const sse = await readSSE(r.body, (s) => { emitted = true; onToken(s); }); sse.__route = route; return sse; }
         const data = await r.json() as any;
-        if (data && typeof data === "object") data.__route = { provider: r.headers.get("x-syok-provider") || "", model: r.headers.get("x-syok-model") || "", attempts: r.headers.get("x-syok-attempts") || "", details: r.headers.get("x-syok-attempt-details") || "" };
+        if (data && typeof data === "object") data.__route = route;
         return data;
       }
       const bodyText = briefBody(await r.text());
@@ -184,11 +221,12 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
   messages.push({ role: "user", content: withImages(planned + (o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.`), o.images || []) });
   const f = o.fetchImpl || fetch;
   let summaryFailed = false; let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0, runTries = 0; const routes: Route[] = [];
+  const usage = emptyUsage(); let checkTries = 0, lastProvider = ""; let check: Result["check"];
   const sub = async (task: string, role: string): Promise<string> => {
     const explorer = role !== "worker";
     const child: Ctx = { ...ctx, depth: ctx.depth + 1, allowed: explorer ? READONLY : undefined };
     const r = await runAgent({ root: ctx.root, task, base: o.base, key: o.key, model, mode: ctx.mode, ask: ctx.ask, settings: ctx.settings, profile: { ...profile, maxSteps: Math.min(profile.maxSteps, 20) }, fetchImpl: f, log: (s) => log("  [" + role + "] " + s), ctx: child, system: explorer ? EXPLORER : WORKER, signal: o.signal });
-    tokens += r.tokens;
+    tokens += r.tokens; mergeUsage(usage, r.usage);
     return clip(`(${role} finished in ${r.steps} steps, ${r.stopped})\n${r.summary}`, 6000);
   };
   const stopGate = async (): Promise<boolean> => {
@@ -196,6 +234,22 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     const h = await runHooks(hooks.Stop, "Stop", { cwd: ctx.root, touched: [...ctx.touched] }, ctx.root);
     if (!h.block) { if (h.message) log("[hook] " + h.message); return false; }
     stopTries++; messages.push({ role: "user", content: "A Stop hook says the work is not done yet:\n" + h.message + "\nFix this, then finish again." }); log("[hook blocked finishing] " + h.message); return true;
+  };
+  // Before finishing: if files changed, run the project's own check once. A failure goes back to the AI (twice at most).
+  const checkGate = async (): Promise<boolean> => {
+    if (ctx.depth > 0 || ctx.mode === "plan" || checkTries >= 2 || !ctx.touched.size || !worthChecking(ctx.touched)) return false;
+    const pc = projectCheck(ctx.root, ctx.settings); if (!pc) return false;
+    const allowed = await allowCommand(ctx.mode, ctx.ask, pc.command, ctx.settings);
+    if (!allowed.ok) { check = { command: pc.command, passed: null }; checkTries = 2; log(`(project check not run: ${allowed.why})`); return false; }
+    log(`> project check: ${pc.command}  (from ${pc.source})`);
+    const r = await runCheckCommand(ctx, pc.command, commandTimeout(ctx.settings, 300));
+    ctx.ran.commands++;
+    if (r.code === 0) { check = { command: pc.command, passed: true }; log("(project check passed)"); return false; }
+    check = { command: pc.command, passed: false }; checkTries++;
+    if (r.code === null) { log("(project check could not finish; not counted as a failure of your change)"); check = { command: pc.command, passed: null }; return false; }
+    messages.push({ role: "user", content: `The project's check fails after your changes.\nCommand: ${pc.command}\nExit code: ${r.code}\nOutput (end):\n${r.output.slice(-3500)}\n\nFix the problems your changes caused, then finish again. If a problem was already there before your changes, leave it and say so in your summary.` });
+    log(`[project check failed, exit code ${r.code}] sent back to the AI (${checkTries}/2)`);
+    return true;
   };
   // A skill that needs commands must run at least one (or be refused by the user); asks twice, then accepts.
   const runGate = (): boolean => {
@@ -215,6 +269,10 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     const res = await chat(o.base, o.key, { model, messages, tools: toolDefs(ctx), tool_choice: "auto", temperature: profile.temperature }, f, o.signal, o.onToken, log);
     tokens += res.usage?.total_tokens || 0;
     if (res.__route) routes.push(res.__route);
+    addUsage(usage, res.usage, res.__route);
+    // Say so when a different provider answers than the step before: this is Syok switching for you.
+    const prov = res.__route?.provider || "";
+    if (prov && ctx.depth === 0) { if (lastProvider && prov !== lastProvider) log(`(switched provider: ${lastProvider} -> ${prov}${res.__route.attempts && res.__route.attempts !== "1" ? ", after " + res.__route.attempts + " attempts" : ""})`); lastProvider = prov; }
     const msg = res.choices?.[0]?.message;
     if (!msg) throw new Error("The AI service returned no message.");
     // Some models (gpt-oss on Groq, for one) sometimes write the tool call as JSON text instead of a real tool call. Treat it as the call it was meant to be.
@@ -225,6 +283,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     if (!calls.length) {
       if (profile.nudgeTests && !nudged && ctx.touched.size && !ctx.ran.tests) { nudged = true; messages.push({ role: "user", content: "You changed files but have not run any tests or checks. Run them now, or call finish and say why you could not." }); continue; }
       if (runGate()) continue;
+      if (await checkGate()) continue;
       if (await stopGate()) continue;
       summary = String(msg.content || "(no summary)"); stopped = "answered"; break;
     }
@@ -238,7 +297,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
       if (args === null) { messages.push({ role: "tool", tool_call_id: tc.id, name, content: "Error: the tool arguments were not valid JSON. Send the call again with valid JSON." }); continue; }
       if (name === "finish") {
         messages.push({ role: "tool", tool_call_id: tc.id, name, content: "ok" });
-        if (runGate() || await stopGate()) { for (let j = i + 1; j < calls.length; j++) messages.push({ role: "tool", tool_call_id: calls[j].id, name: calls[j].function?.name, content: "skipped" }); break; }
+        if (runGate() || await checkGate() || await stopGate()) { for (let j = i + 1; j < calls.length; j++) messages.push({ role: "tool", tool_call_id: calls[j].id, name: calls[j].function?.name, content: "skipped" }); break; }
         summary = String(args.summary || ""); stopped = "finished"; finished = true; break;
       }
       const sig = name + JSON.stringify(args); repeats = sig === lastSig ? repeats + 1 : 0; lastSig = sig;
@@ -266,6 +325,6 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     if (finished) break;
   }
   if (!stopped) { stopped = "max_steps"; summary = `Stopped after ${profile.maxSteps} steps without finishing.`; }
-  return { summary, steps, tokens, touched: [...ctx.touched], stopped, messages, ranTests: ctx.ran.tests, routes, commands: ctx.ran.commands, declined: ctx.ran.declined };
+  return { summary, steps, tokens, touched: [...ctx.touched], stopped, messages, ranTests: ctx.ran.tests, routes, commands: ctx.ran.commands, declined: ctx.ran.declined, usage, check };
 }
 export { makeCtx, undoAll };
