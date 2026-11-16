@@ -51,6 +51,7 @@ Heavy jobs on a rented cloud computer (your own Modal account; billed to you per
      --gpu T4|L4|A10|A100   --image python:3.12-slim   --timeout 60 (minutes, at most 1440)   --cpu 4   --memory 8192 (MB)
      --out results          bring the folder "results" back into this project when it ends
      --no-upload            do not send this folder      --detach   leave it running and come back later
+     (being tested, not switched on yet: --on codespace --codespace <name> runs it on your own GitHub Codespace)
   syok remote                                  list detached runs
   syok remote logs <n> [--tail 200]            see the output of a detached run
   syok remote stop <n>                         bring back results and switch its computer off

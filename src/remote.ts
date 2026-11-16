@@ -15,8 +15,10 @@ export interface Box {
   download(remotePath: string, localFile: string): Promise<void>;
   /** Run a shell command line there. Output arrives as it is produced. Resolves with the exit code. */
   exec(command: string, o: { cwd?: string; onOut?: (s: string) => void; onErr?: (s: string) => void; timeoutMs?: number }): Promise<number>;
-  /** Switch the remote computer off (stops the billing). */
+  /** Switch the remote computer off (stops the billing), or for a computer the user keeps, clean up this run's folder. */
   terminate(): Promise<void>;
+  /** The folder on the remote computer where the project is placed. Default /work. */
+  work?: string;
 }
 export interface BoxOptions { image: string; gpu?: string; cpu?: number; memoryMiB?: number; timeoutMs: number }
 export interface Provider {
@@ -27,10 +29,16 @@ export interface Provider {
   attach(id: string): Promise<Box>;
   /** Close network connections so the program can exit. */
   close(): void;
+  /** Options this provider cannot honour (the run is refused with a clear message instead of ignoring them). */
+  unsupported?: Array<"gpu" | "image" | "cpu" | "memory">;
+  /** Wording for a provider that is not a rented, switched-off-afterwards computer (for example the user's own Codespace). */
+  notes?: { start(o: BoxOptions): string; end(box: Box, seconds: number): string; detached?(n: number, timeoutMin: number): string; stopped?(n: number, box: Box, code: number | null): string };
 }
 
 export const WORK = "/work";
-const RUN_DIR = WORK + "/.syok-run"; // where a detached run keeps its log, process number and exit code
+const workOf = (b: Box) => b.work || WORK;
+const runDirOf = (b: Box) => workOf(b) + "/.syok-run"; // where a detached run keeps its log and exit code
+const tmpOf = (b: Box, name: string) => (b.work ? b.work + ".tmp-" + name : "/tmp/syok-" + name);
 export const MAX_UPLOAD = 200 * 1024 * 1024;
 const SKIP_DIRS = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".syok", ".pytest_cache", ".mypy_cache", ".next", ".turbo", ".cache", "target"]);
 const q = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
@@ -108,7 +116,7 @@ export interface RunResult { exitCode: number; boxId: string; seconds: number; d
 export interface RunIO { log: (s: string) => void; out: (s: string) => void; err: (s: string) => void; onBox?: (b: Box) => void }
 
 async function prepare(box: Box, o: RunOptions, io: RunIO): Promise<void> {
-  const mk = await box.exec("mkdir -p " + q(WORK), {});
+  const mk = await box.exec("mkdir -p " + q(workOf(box)), {});
   if (mk !== 0) throw new Error("could not create the work folder on the remote computer");
   if (o.upload === false) return;
   const picked = pickFiles(o.root);
@@ -120,8 +128,9 @@ async function prepare(box: Box, o: RunOptions, io: RunIO): Promise<void> {
   try {
     packFiles(o.root, picked.files, tgz);
     io.log(`Sending ${picked.files.length} files (${(statSync(tgz).size / 1048576).toFixed(1)} MB packed)...`);
-    await box.upload(tgz, "/tmp/syok-project.tgz");
-    const ex = await box.exec("tar -xzf /tmp/syok-project.tgz -C " + q(WORK) + " && rm -f /tmp/syok-project.tgz", { onErr: io.err });
+    const remoteTgz = tmpOf(box, "project.tgz");
+    await box.upload(tgz, remoteTgz);
+    const ex = await box.exec("tar -xzf " + q(remoteTgz) + " -C " + q(workOf(box)) + " && rm -f " + q(remoteTgz), { onErr: io.err });
     if (ex !== 0) throw new Error("could not unpack the project on the remote computer (the image needs the tar and gzip programs)");
   } finally { try { rmSync(tmp, { recursive: true, force: true }); } catch {} }
 }
@@ -129,13 +138,14 @@ async function prepare(box: Box, o: RunOptions, io: RunIO): Promise<void> {
 /** Bring one remote folder (inside the work folder) back into the same folder of the project. Returns the number of files. */
 export async function fetchOut(box: Box, root: string, out: string, io: Pick<RunIO, "log" | "err">): Promise<number> {
   const rel = out.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
-  const has = await box.exec("test -d " + q(WORK + "/" + rel), {});
+  const remoteOut = tmpOf(box, "out.tgz");
+  const has = await box.exec("test -d " + q(workOf(box) + "/" + rel), {});
   if (has !== 0) { io.log(`Nothing to bring back: the command did not create the folder "${rel}".`); return 0; }
-  const pack = await box.exec("tar -czf /tmp/syok-out.tgz -C " + q(WORK) + " " + q(rel), { onErr: io.err });
+  const pack = await box.exec("tar -czf " + q(remoteOut) + " -C " + q(workOf(box)) + " " + q(rel), { onErr: io.err });
   if (pack !== 0) throw new Error("could not pack the results on the remote computer");
   const tmp = mkdtempSync(join(tmpdir(), "syok-out-")); const tgz = join(tmp, "out.tgz");
   try {
-    await box.download("/tmp/syok-out.tgz", tgz);
+    await box.download(remoteOut, tgz);
     // Look before unpacking: refuse anything that would land outside the chosen folder, and never overwrite secret files.
     const names = spawnSync("tar", ["-tzf", tgz], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true });
     if (names.status !== 0) throw new Error("the results archive could not be read");
@@ -155,39 +165,46 @@ export async function fetchOut(box: Box, root: string, out: string, io: Pick<Run
 const shellLine = (cmd: string) => `if command -v bash >/dev/null 2>&1; then exec bash -lc ${q(cmd)}; else exec sh -c ${q(cmd)}; fi`;
 
 /** One line that starts the command in its own session (so it survives when this connection closes), logging to a file and saving its exit code. */
-export function detachLine(cmd: string): string {
-  const inner = `sh -c ${q(shellLine(cmd))} > ${q(RUN_DIR + "/log")} 2>&1; echo $? > ${q(RUN_DIR + "/code")}`;
-  return `mkdir -p ${q(RUN_DIR)} && cd ${q(WORK)} && rm -f ${q(RUN_DIR + "/code")} && if command -v setsid >/dev/null 2>&1; then setsid nohup sh -c ${q(inner)} > /dev/null 2>&1 < /dev/null & else nohup sh -c ${q(inner)} > /dev/null 2>&1 < /dev/null & fi; echo started`;
+export function detachLine(cmd: string, work: string = WORK, maxSeconds = 0): string {
+  const dir = work + "/.syok-run";
+  // A time limit kept by the remote computer itself (exit code 124), for computers that are not switched off by their cloud.
+  const limited = maxSeconds > 0 ? `if command -v timeout >/dev/null 2>&1; then timeout -k 10 ${Math.floor(maxSeconds)} sh -c ${q(shellLine(cmd))}; else sh -c ${q(shellLine(cmd))}; fi` : `sh -c ${q(shellLine(cmd))}`;
+  const inner = `(${limited}) > ${q(dir + "/log")} 2>&1; echo $? > ${q(dir + "/code")}`;
+  return `mkdir -p ${q(dir)} && cd ${q(work)} && rm -f ${q(dir + "/code")} && if command -v setsid >/dev/null 2>&1; then setsid nohup sh -c ${q(inner)} > /dev/null 2>&1 < /dev/null & else nohup sh -c ${q(inner)} > /dev/null 2>&1 < /dev/null & fi; echo started`;
 }
 
 export async function remoteRun(p: Provider, o: RunOptions, io: RunIO): Promise<RunResult> {
   const problems = optionProblems(o);
   if (problems.length) throw new Error(problems.join("\n"));
+  const given: Record<string, unknown> = { gpu: o.gpu, image: o.image, cpu: o.cpu, memory: o.memoryMiB };
+  const no = (p.unsupported || []).filter((k) => given[k] !== undefined);
+  if (no.length) throw new Error(`${no.map((k) => "--" + k).join(" and ")} cannot be used with ${p.name}: its size and software are whatever that computer already has.`);
   const why = await p.problem(); if (why) throw new Error(why);
   const timeoutMin = o.timeoutMin ?? 60, image = o.image || defaultImage(o.root), t0 = Date.now();
-  io.log(`Renting a computer on ${p.name} (image ${image}${o.gpu ? ", GPU " + o.gpu : ""}, switched off after at most ${timeoutMin} minutes). ${p.name} bills your own account while it is on.`);
-  const box = await p.create({ image, gpu: o.gpu, cpu: o.cpu, memoryMiB: o.memoryMiB, timeoutMs: timeoutMin * 60_000 });
+  const boxOpts: BoxOptions = { image, gpu: o.gpu, cpu: o.cpu, memoryMiB: o.memoryMiB, timeoutMs: timeoutMin * 60_000 };
+  io.log(p.notes ? p.notes.start(boxOpts) : `Renting a computer on ${p.name} (image ${image}${o.gpu ? ", GPU " + o.gpu : ""}, switched off after at most ${timeoutMin} minutes). ${p.name} bills your own account while it is on.`);
+  const box = await p.create(boxOpts);
   io.onBox?.(box);
   let keep = false;
   try {
     await prepare(box, o, io);
     if (o.detach) {
       // Start the command so that it keeps going after this program leaves: its output goes to a log file, its exit code to another.
-      const start = detachLine(o.command);
+      const start = detachLine(o.command, workOf(box), p.notes ? timeoutMin * 60 : 0);
       const ex = await box.exec(start, { onErr: io.err });
       if (ex !== 0) throw new Error("could not start the command on the remote computer");
       const n = saveRun(o.root, { provider: p.name, boxId: box.id, command: o.command, started: Date.now(), timeoutMin, image, gpu: o.gpu, out: o.out });
       keep = true;
-      io.log(`Started as remote run ${n}. It keeps running (and billing) until it finishes and you stop it, or ${timeoutMin} minutes pass.\n  syok remote logs ${n}      see its output\n  syok remote stop ${n}      bring back results${o.out ? ` (${o.out}/)` : ""} and switch the computer off`);
+      io.log(p.notes?.detached ? p.notes.detached(n, timeoutMin) : `Started as remote run ${n}. It keeps running (and billing) until it finishes and you stop it, or ${timeoutMin} minutes pass.\n  syok remote logs ${n}      see its output\n  syok remote stop ${n}      bring back results${o.out ? ` (${o.out}/)` : ""} and switch the computer off`);
       return { exitCode: 0, boxId: box.id, seconds: Math.round((Date.now() - t0) / 1000), detached: n };
     }
     io.log("Running: " + o.command + "\n");
-    const exitCode = await box.exec(shellLine(o.command), { cwd: WORK, onOut: io.out, onErr: io.err, timeoutMs: timeoutMin * 60_000 });
+    const exitCode = await box.exec(shellLine(o.command), { cwd: workOf(box), onOut: io.out, onErr: io.err, timeoutMs: timeoutMin * 60_000 });
     let downloaded: number | undefined, note: string | undefined;
     if (o.out) { try { downloaded = await fetchOut(box, o.root, o.out, io); } catch (e: any) { note = "The results could not be brought back: " + (e?.message || e); io.err(note + "\n"); } }
     return { exitCode, boxId: box.id, seconds: Math.round((Date.now() - t0) / 1000), downloaded, note };
   } finally {
-    if (!keep) { try { await box.terminate(); io.log(`\nRemote computer switched off after ${Math.round((Date.now() - t0) / 1000)} seconds.`); } catch (e: any) { io.err(`\nWARNING: the remote computer (${box.id}) may still be on and billing: ${e?.message || e}. Switch it off in your ${p.name} dashboard.\n`); } }
+    if (!keep) { try { await box.terminate(); const secs = Math.round((Date.now() - t0) / 1000); io.log("\n" + (p.notes ? p.notes.end(box, secs) : `Remote computer switched off after ${secs} seconds.`)); } catch (e: any) { io.err(`\nWARNING: the remote computer (${box.id}) may still be on and billing: ${e?.message || e}. Switch it off in your ${p.name} dashboard.\n`); } }
   }
 }
 
@@ -217,7 +234,7 @@ export function describeRuns(root: string, now = Date.now()): string {
 }
 /** The state of a detached run: its exit code when it has finished, else null. */
 async function runState(box: Box): Promise<number | null> {
-  let code = ""; const ex = await box.exec(`cat ${q(RUN_DIR + "/code")} 2>/dev/null`, { onOut: (s) => (code += s) });
+  let code = ""; const ex = await box.exec(`cat ${q(runDirOf(box) + "/code")} 2>/dev/null`, { onOut: (s) => (code += s) });
   return ex === 0 && /^\d+\s*$/.test(code) ? +code : null;
 }
 export async function remoteLogs(p: Provider, root: string, n: number, io: RunIO, o: { tail?: number } = {}): Promise<{ finished: boolean; exitCode: number | null }> {
@@ -225,7 +242,7 @@ export async function remoteLogs(p: Provider, root: string, n: number, io: RunIO
   if (r.stopped) throw new Error(`Remote run ${n} was stopped and its computer is gone, so its log is no longer there.`);
   const box = await attachOr(p, r, n);
   const tail = Math.max(1, Math.min(100000, Math.floor(o.tail || 200)));
-  await box.exec(`tail -n ${tail} ${q(RUN_DIR + "/log")} 2>/dev/null`, { onOut: io.out, onErr: io.err });
+  await box.exec(`tail -n ${tail} ${q(runDirOf(box) + "/log")} 2>/dev/null`, { onOut: io.out, onErr: io.err });
   const code = await runState(box);
   io.log(code === null ? `\n[still running; syok remote stop ${n} switches the computer off]` : `\n[finished, exit code ${code}; the computer is still on until you run: syok remote stop ${n}]`);
   return { finished: code !== null, exitCode: code };
@@ -244,7 +261,7 @@ export async function remoteStop(p: Provider, root: string, n: number, io: RunIO
   } finally {
     await box.terminate();
     writeRun(root, n, { ...r, stopped: Date.now(), exitCode: code });
-    io.log(`Remote run ${n}: computer switched off${code === null ? "" : " (the command had finished with exit code " + code + ")"}.`);
+    io.log(p.notes?.stopped ? p.notes.stopped(n, box, code) : `Remote run ${n}: computer switched off${code === null ? "" : " (the command had finished with exit code " + code + ")"}.`);
   }
   return { exitCode: code, downloaded };
 }
