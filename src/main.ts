@@ -42,6 +42,10 @@ Skills (instruction files the AI follows, including commands it runs itself):
   syok skills                                  list your skills (.syok/skills, .claude/skills and ~/.syok/skills)
   syok skill add <github-link|owner/repo/path|file>   save a skill into this project
   syok skill <name> "what you want"            run a skill: it shows its commands first, and you still approve each one (or use --mode auto)
+Web (the AI can look things up; in ask mode you approve the first search and each new site):
+  --no-web                                     switch web_search and web_fetch off   (or "web": false in .syok/settings.json)
+  "allow_hosts": ["python.org"]                in .syok/settings.json: sites that may be read without asking
+  EXA_API_KEY=...                              optional: your own Exa key for a more reliable search
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
 Saved jobs (long scripts that keep running after you exit; the AI starts them with job_start):
@@ -140,6 +144,8 @@ if (settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, root, (s)
 const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); };
 process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exit(130); });
 const onToken = !JSON_OUT && !has("--no-stream") ? (s: string) => process.stdout.write(s) : undefined;
+ctx.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
+if (has("--no-web")) settings.web = false;
 if (has("--sandbox")) ctx.sandbox = (cmd, secs) => sandboxExec({ base, key }, cmd, secs);
 const resumeRef = has("--resume") ? (arg("--resume").startsWith("-") ? "" : arg("--resume")) : "";
 const resumed = has("--continue") || has("--resume") ? loadSession(root, resumeRef || undefined) : null;

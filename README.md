@@ -2,7 +2,7 @@
 
 Syok Code for your own computer: an AI coding agent that reads your project, edits files, runs your tests and fixes what it broke. It talks to **your own Syok AI key**, so automatic key switching (when one provider hits a limit) keeps working in the middle of a long task.
 
-Status: early (v0.8). Built for computers that are fast and stable.
+Status: early (v0.9). Built for computers that are fast and stable.
 
 ## Quick start
 1. Install (one line; you do not need to install anything else first):
@@ -28,6 +28,17 @@ Run one task and exit: `syok -p "fix the failing test" --mode accept-edits`
 - `/undo` restores every file changed in the session.
 - The agent can only touch files inside the folder you started it in.
 - Treat file contents as untrusted: a file can contain text that tries to give the AI instructions.
+
+## Looking things up on the web
+The AI has two web tools, so it can check current facts, documentation and error messages instead of guessing:
+- `web_search`: finds pages. It tries, in order: the search in your own Syok account (when your Syok version offers it to developer keys), your own Exa key if you set `EXA_API_KEY`, then DuckDuckGo with no key. DuckDuckGo sometimes refuses automated requests; the AI is told plainly when a search did not work.
+- `web_fetch`: reads one page as plain text (menus, scripts and styles removed; long pages come in parts).
+
+Safety:
+- In **ask** and **accept-edits** modes you approve the first search and each new website. Sites listed in `"allow_hosts"` in `.syok/settings.json` (for example `["python.org"]`, sub-domains included) need no question. **auto** mode does not ask.
+- Never fetched: cloud metadata and link-local addresses (also when a redirect or a harmless-looking name points there), addresses with a password in them, and any address or search that contains something that looks like a secret key.
+- Web text is marked as untrusted and the AI is told never to follow instructions found in it. That lowers the risk; it does not remove it, so keep **auto** mode for folders you can afford to lose.
+- Switch the web tools off with `--no-web` or `"web": false` in `.syok/settings.json`.
 
 ## Project instructions
 Put a `SYOK.md`, `AGENTS.md` or `CLAUDE.md` in the project root and it is added to the instructions (first 8,000 characters).
