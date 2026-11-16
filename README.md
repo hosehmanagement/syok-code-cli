@@ -51,6 +51,12 @@ Safety:
 
 Limits: a pull request opened this way does not start your other workflows by itself (a GitHub rule for its built-in token). Each request uses your Syok key and GitHub Actions minutes, up to 30 minutes.
 
+## Inside VS Code (extension)
+The folder `vscode/` holds a small VS Code extension. It adds "Syok Code" commands to the editor (open chat, give it a task, ask about the selected code, fix the problems in this file) and a "Syok" button in the status bar. Each one starts this same `syok` program in the editor's own terminal, so permissions and safety work exactly as in a normal terminal.
+- Install: download `syok-code.vsix` (built by the tests workflow, under "Artifacts"), then in VS Code: Extensions, the "..." menu, "Install from VSIX...". It also works in editors built on VS Code, such as Cursor and Windsurf.
+- It needs Syok Code 0.13 or newer (`syok update`).
+- The task you type never passes through a shell: it is written to a private file that the program reads and removes (`--task-file`), and the chat stays open afterwards (`--stay`).
+
 ## Checks after edits
 The AI's changes are checked automatically, so mistakes are caught while it is still working:
 - **After every edit:** a fast syntax check of that one file (JavaScript, TypeScript, JSON, Python, shell, PHP, Ruby, Go, Lua). The result is part of what the AI sees, so a broken bracket is fixed in the next step. It checks syntax only, not types, and never changes a file.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { createInterface } from "node:readline/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { runAgent, makeCtx, undoAll, askModel, type Msg , emptyUsage, mergeUsage, describeUsage, type Result } from "./agent.ts";
@@ -32,6 +32,7 @@ const HELP = `Syok Code (command line)
 Usage:
   syok                       chat in the current folder
   syok -p "fix the failing test"   run one task and print the result
+  syok -p "task" --stay            run one task, then stay in the chat
 Coding modes (work in 30+ languages, and check their own work):
   syok gen "a function that checks a palindrome" --lang python [--out file]   plain words -> working code
   syok translate utils.py --to go                 same behaviour in another language (new file beside the old one)
@@ -222,7 +223,7 @@ async function turn(text: string) {
   } catch (e: any) { console.log("Error: " + e.message); }
 }
 async function readStdin(): Promise<string> { const ch: Buffer[] = []; for await (const c of process.stdin) ch.push(c as Buffer); return Buffer.concat(ch).toString("utf8").trim(); }
-const VALUE_FLAGS = new Set(["--lang", "--to", "--out", "--cwd", "--model", "--mode", "--profile", "--max-steps", "-p"]);
+const VALUE_FLAGS = new Set(["--lang", "--to", "--out", "--cwd", "--model", "--mode", "--profile", "--max-steps", "-p", "--task-file"]);
 function words(s: string) { return (s.match(/"[^"]*"|'[^']*'|\S+/g) || []).map((w) => w.replace(/^(["'])(.*)\1$/, "$2")); }
 function modeTask(kind: Kind, toks: string[]) {
   const pos: string[] = []; const f: Record<string, string> = {};
@@ -286,6 +287,15 @@ if (process.argv[2] === "skills" || process.argv[2] === "skill") {
 }
 const sub = process.argv[2] as Kind;
 let prompt = arg("-p"), readOnlyRun = false;
+// --task-file: the task is read from a file (and the file removed). Used by the editor extension so that no character of the task passes through a shell.
+const taskFile = arg("--task-file");
+if (taskFile) {
+  try { prompt = readFileSync(taskFile, "utf8").trim(); } catch (e: any) { console.error("Could not read the task file " + taskFile + ": " + e.message); process.exit(2); }
+  try { rmSync(taskFile, { force: true }); } catch {}
+  if (!prompt) { console.error("The task file is empty."); process.exit(2); }
+}
+// --stay: after the task, stay in the chat instead of exiting (needs a terminal).
+const stay = has("--stay") && !!rl && !JSON_OUT;
 if (KINDS.includes(sub)) {
   const b = modeTask(sub, process.argv.slice(3));
   if (b.error) { console.error(b.error); process.exit(2); }
@@ -299,7 +309,8 @@ if (prompt) {
   history = r.messages; persist();
   if (JSON_OUT) console.log(JSON.stringify({ summary: r.summary, session: sessionId, steps: r.steps, tokens: r.tokens, touched: r.touched, stopped: r.stopped, ranTests: r.ranTests, commands: r.commands, declined: r.declined, usage: r.usage, check: r.check ?? null }));
   else console.log("\n" + r.summary + "\n" + report(r));
-  rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1);
+  if (!stay) { rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1); }
+  ctx.allowed = undefined;
 }
 if (!rl) { console.error("No task given. Use -p \"task\" or run in a terminal."); process.exit(2); }
 console.log(`Syok Code in ${root}  (mode: ${mode}, model: ${model}). Type /help.`);

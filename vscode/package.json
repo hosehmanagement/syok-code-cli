@@ -1,0 +1,49 @@
+{
+  "name": "syok-code",
+  "displayName": "Syok Code",
+  "description": "Run Syok Code, the AI coding agent that uses your own Syok keys, inside the editor: chat, give it a task, ask about selected code, fix the problems in a file.",
+  "version": "0.1.0",
+  "publisher": "syok-code",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["AI", "Programming Languages", "Other"],
+  "keywords": ["ai", "agent", "syok", "coding assistant"],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "syokCode.start", "title": "Syok Code: Open chat" },
+      { "command": "syokCode.runTask", "title": "Syok Code: Give it a task..." },
+      { "command": "syokCode.askSelection", "title": "Syok Code: Ask about the selected code..." },
+      { "command": "syokCode.fixProblems", "title": "Syok Code: Fix the problems in this file" },
+      { "command": "syokCode.install", "title": "Syok Code: Install or update the command-line program" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "syokCode.askSelection", "when": "editorHasSelection", "group": "syok@1" },
+        { "command": "syokCode.fixProblems", "group": "syok@2" }
+      ]
+    },
+    "keybindings": [
+      { "command": "syokCode.runTask", "key": "ctrl+alt+s", "mac": "cmd+alt+s" }
+    ],
+    "configuration": {
+      "title": "Syok Code",
+      "properties": {
+        "syokCode.path": { "type": "string", "default": "", "description": "Full path of the syok program. Leave empty to use the one the installer puts in the .syok folder of your home folder." },
+        "syokCode.mode": { "type": "string", "enum": ["ask", "accept-edits", "plan", "auto"], "default": "ask", "description": "How much Syok Code may do without asking you: ask (asks before every change and command), accept-edits (edits freely, asks before commands), plan (plans first), auto (asks nothing)." },
+        "syokCode.model": { "type": "string", "default": "", "description": "Model name to ask for. Leave empty for Syok's default." },
+        "syokCode.extraArguments": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Extra words added to every syok start, for example [\"--no-web\"]." }
+      }
+    }
+  },
+  "scripts": {
+    "test:unit": "node --test test/lib.test.js",
+    "test:vscode": "node test/run-vscode.js",
+    "package": "vsce package --no-dependencies --out syok-code.vsix"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.2.1"
+  }
+}

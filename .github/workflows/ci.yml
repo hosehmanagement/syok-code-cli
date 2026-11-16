@@ -87,3 +87,41 @@ jobs:
           $failed = $false; try { Get-Content -Raw install/install.ps1 | Invoke-Expression } catch { $failed = $true }
           if (-not $failed) { throw 'a damaged download was accepted' }
           $j = & "$env:SYOK_HOME\bin\syok.cmd" jobs; if ("$j" -notmatch 'No saved jobs') { throw "after failed update: $j" }
+  # The VS Code extension is tested inside a real VS Code on Linux, Windows and Mac: the extension starts the real syok
+  # program (built here) in the editor's own terminal, against a stand-in AI server. The installable .vsix file is kept.
+  vscode:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      SYOK_REQUIRE_REAL: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: npm ci --no-audit --no-fund
+        working-directory: vscode
+      - run: npm run test:unit
+        working-directory: vscode
+      - name: Tests inside VS Code (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:vscode
+        working-directory: vscode
+      - name: Tests inside VS Code (Windows, Mac)
+        if: runner.os != 'Linux'
+        run: npm run test:vscode
+        working-directory: vscode
+      - name: Build the installable file
+        if: runner.os == 'Linux'
+        run: npm run package
+        working-directory: vscode
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: syok-code-vscode
+          path: vscode/syok-code.vsix
