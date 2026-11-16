@@ -50,18 +50,30 @@ export function friendly(e: any): Error {
   if (/image|registry|manifest|pull/i.test(m) && /not found|failed|unauthorized|denied/i.test(m)) return new Error("Modal could not get that container image. Check the --image name.\n(Modal said: " + m.slice(0, 200) + ")");
   return e instanceof Error ? e : new Error(m);
 }
-export function modalProvider(load: () => Promise<any> = () => import("modal")): Provider {
+export function modalProvider(load: () => Promise<any> = () => import("modal"), note: (s: string) => void = (s) => console.error(s)): Provider {
   let client: any = null;
   // Tokens pasted with a stray space or line break are a common mistake, so they are trimmed before use.
-  const tok = () => { const id = (process.env.MODAL_TOKEN_ID || "").trim(), secret = (process.env.MODAL_TOKEN_SECRET || "").trim(); return id && secret ? { tokenId: id, tokenSecret: secret } : {}; };
+  let addPrefix = false;
+  const tok = () => { const id = (process.env.MODAL_TOKEN_ID || "").trim(), secret = (process.env.MODAL_TOKEN_SECRET || "").trim(); return id && secret ? { tokenId: id, tokenSecret: addPrefix ? "as-" + secret : secret } : {}; };
   const get = async () => (client ||= new (await load()).ModalClient(tok()));
+  // A secret saved without its "as-" start is a common copy mistake. When Modal refuses such a secret, try once more with the start added.
+  const authed = async <T>(run: () => Promise<T>): Promise<T> => {
+    try { return await run(); }
+    catch (e: any) {
+      const secret = (process.env.MODAL_TOKEN_SECRET || "").trim();
+      if (addPrefix || !secret || secret.startsWith("as-") || !/UNAUTHENTICATED|Token not found|invalid token/i.test(String(e?.message || e))) throw e;
+      try { client?.close(); } catch {} client = null; addPrefix = true;
+      try { const r = await run(); note('Note: your MODAL_TOKEN_SECRET was saved without "as-" at the start. It worked with "as-" added; save it in full to avoid this extra step.'); return r; }
+      catch (e2) { try { client?.close(); } catch {} client = null; addPrefix = false; throw e; }
+    }
+  };
   return {
     name: "Modal",
     problem: async () => (modalHasToken() ? null : MODAL_SETUP),
     create: async (o: BoxOptions) => {
-      try { return await create(o); } catch (e) { throw friendly(e); }
+      try { return await authed(() => create(o)); } catch (e) { throw friendly(e); }
     },
-    attach: async (id: string) => { try { return box(await (await get()).sandboxes.fromId(id)); } catch (e) { throw friendly(e); } },
+    attach: async (id: string) => { try { return await authed(async () => box(await (await get()).sandboxes.fromId(id))); } catch (e) { throw friendly(e); } },
     close: () => { try { client?.close(); } catch {} client = null; },
   };
   async function create(o: BoxOptions): Promise<Box> {

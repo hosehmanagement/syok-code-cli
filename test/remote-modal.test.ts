@@ -67,3 +67,27 @@ test("a refused token is explained by its shape, never by its value; pasted spac
     expect(got).toEqual({ tokenId: "ak-SECRETVALUE1", tokenSecret: "as-SECRETVALUE2" });
   } finally { if (old.id === undefined) delete process.env.MODAL_TOKEN_ID; else process.env.MODAL_TOKEN_ID = old.id; if (old.s === undefined) delete process.env.MODAL_TOKEN_SECRET; else process.env.MODAL_TOKEN_SECRET = old.s; }
 });
+
+test("a secret saved without its as- start: refused once, then retried with as- added, and the user is told; a truly wrong token still fails", async () => {
+  const old = { id: process.env.MODAL_TOKEN_ID, s: process.env.MODAL_TOKEN_SECRET };
+  const seen: any[] = []; const notes: string[] = [];
+  const sdk = (good: string) => async () => ({ ModalClient: class { p: any; constructor(p: any) { this.p = p; seen.push(p.tokenSecret); }
+    apps = { fromName: async () => { if (this.p.tokenSecret !== good) throw new Error("/modal.client.ModalClient/AuthTokenGet UNAUTHENTICATED: Token not found"); return {}; } };
+    images = { fromRegistry: () => ({}) }; sandboxes = { create: async () => ({ sandboxId: "sb-ok", setTags: async () => {} }), fromId: async (id: string) => { if (this.p.tokenSecret !== good) throw new Error("UNAUTHENTICATED: Token not found"); return { sandboxId: id }; } }; close() {} } });
+  try {
+    process.env.MODAL_TOKEN_ID = "ak-id"; process.env.MODAL_TOKEN_SECRET = "REALSECRET";
+    const p = modalProvider(sdk("as-REALSECRET"), (s) => notes.push(s));
+    expect((await p.create({ image: "a", timeoutMs: 1 })).id).toBe("sb-ok");
+    expect(seen).toEqual(["REALSECRET", "as-REALSECRET"]); expect(notes.length).toBe(1); expect(notes[0]).toMatch(/saved without "as-"/); expect(notes[0]).not.toContain("REALSECRET");
+    expect((await p.attach("sb-9")).id).toBe("sb-9"); expect(seen.length).toBe(2); // the working form is kept, no second retry
+    // A secret that is wrong either way: one retry, then the plain refusal (with the shape, never the value).
+    seen.length = 0; notes.length = 0;
+    const bad = modalProvider(sdk("as-SOMETHINGELSE"), (s) => notes.push(s));
+    const err = await bad.create({ image: "a", timeoutMs: 1 }).catch((e) => e);
+    expect(err.message).toMatch(/Modal did not accept your token/); expect(err.message).not.toContain("REALSECRET"); expect(seen).toEqual(["REALSECRET", "as-REALSECRET"]); expect(notes).toEqual([]);
+    // A secret that already has as- is never changed.
+    seen.length = 0; process.env.MODAL_TOKEN_SECRET = "as-WRONG";
+    await modalProvider(sdk("as-RIGHT"), () => {}).create({ image: "a", timeoutMs: 1 }).catch(() => {});
+    expect(seen).toEqual(["as-WRONG"]);
+  } finally { if (old.id === undefined) delete process.env.MODAL_TOKEN_ID; else process.env.MODAL_TOKEN_ID = old.id; if (old.s === undefined) delete process.env.MODAL_TOKEN_SECRET; else process.env.MODAL_TOKEN_SECRET = old.s; }
+});
