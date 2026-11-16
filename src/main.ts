@@ -62,6 +62,8 @@ Checks after edits (on by default):
   "check_command": "npm run typecheck"         in .syok/settings.json: your own project check
 Usage: after each task you see tokens in and out and which provider answered; /usage shows the session total.
   "prices": { "gpt-5": { "in": 1.25, "out": 10 } }   in .syok/settings.json: US dollars per million tokens, for a cost estimate
+GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
+  syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
 Saved jobs (long scripts that keep running after you exit; the AI starts them with job_start):
@@ -144,6 +146,29 @@ if (["jobs", "logs", "stop"].includes(process.argv[2] ?? "")) {
 }
 const cfg = readJson(join(homedir(), ".syok", "config.json"));
 const base = process.env.SYOK_BASE_URL || cfg.base || "", key = process.env.SYOK_API_KEY || cfg.key || "";
+if (process.argv[2] === "github-action") {
+  // Writes the workflow file that lets people write "@syok ..." in issues and pull requests. Needs no key.
+  const { writeWorkflow } = await import("./action.ts"); const aroot = resolve(arg("--cwd", process.cwd()));
+  const r = writeWorkflow(aroot, has("--force")); (r.ok ? console.log : console.error)(r.message); process.exit(r.ok ? 0 : 2);
+}
+if (process.argv[2] === "action") {
+  // Runs inside GitHub Actions (see: syok github-action). A missing key is answered with a comment, so it is handled in there.
+  const { runAction } = await import("./action.ts"); const aroot = resolve(arg("--cwd", process.cwd()));
+  const m = arg("--model", "syok-coder");
+  const r = await runAction({
+    run: realRun, log: (x) => console.log(x), env: { ...process.env, SYOK_BASE_URL: base, SYOK_API_KEY: key }, root: aroot,
+    agent: async (task, o) => {
+      const st = pluginSettings(aroot, readJson(join(aroot, ".syok", "settings.json"))); const pf = pickProfile(m, undefined, {});
+      const c = makeCtx(aroot, "auto", async () => false, st, pf);
+      c.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
+      if (o.readOnly) c.allowed = READONLY;
+      const res = await runAgent({ root: aroot, task, base, key, model: m, mode: "auto", settings: st, profile: pf, ctx: c, log: (x) => console.log(x) });
+      c.bg.stopAll();
+      return { summary: res.summary, stopped: res.stopped, touched: res.touched, usageLine: describeUsage(res.usage, st.prices), check: res.check };
+    },
+  });
+  console.log("Result: " + r.did); process.exit(r.code);
+}
 if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok --help"); process.exit(2); }
 const root = resolve(arg("--cwd", process.cwd()));
 let model = arg("--model", "syok-coder"), mode = arg("--mode", "ask") as Mode;

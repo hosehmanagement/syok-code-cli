@@ -3,7 +3,7 @@
 //                "PostToolUse": [{ "match": "edit_file", "command": "npx prettier --write ." }],
 //                "Stop": [{ "command": "npm test" }] } }
 // The command gets the event as JSON on its input. Exit code 2 blocks (PreToolUse) or sends the message back to the AI (Stop).
-import { spawnCommand, killTree } from "./shell.ts";
+import { spawnCommand, killTree, cleanEnv } from "./shell.ts";
 export interface Hook { match?: string; command: string; timeout_sec?: number }
 export interface HookResult { block: boolean; message: string }
 export async function runHooks(hooks: Hook[] | undefined, event: string, payload: any, root: string, toolName = ""): Promise<HookResult> {
@@ -18,7 +18,7 @@ export async function runHooks(hooks: Hook[] | undefined, event: string, payload
 }
 function one(h: Hook, payload: any, cwd: string): Promise<{ code: number; text: string }> {
   return new Promise((res) => {
-    const env = { ...process.env }; delete env.SYOK_API_KEY; delete env.GITHUB_TOKEN;
+    const env = cleanEnv();
     const ch = spawnCommand(h.command, cwd, env, ["pipe", "pipe", "pipe"]);
     let o = "", e = "", done = false;
     ch.stdout!.on("data", (d) => (o += d)); ch.stderr!.on("data", (d) => (e += d));

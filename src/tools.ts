@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { resolve, relative, dirname, join, sep } from "node:path";
 import { spawnSync } from "node:child_process";
-import { spawnCommand, killTree } from "./shell.ts";
+import { spawnCommand, killTree, cleanEnv } from "./shell.ts";
 import { isProtected, SECRET_LIKE, allowEdit, allowCommand, type Mode, type Asker, type Settings } from "./perm.ts";
 import type { Profile } from "./profiles.ts";
 import { unifiedDiff } from "./diff.ts";
@@ -265,7 +265,7 @@ export async function runCheckCommand(c: Ctx, cmd: string, secs: number): Promis
 }
 function sh(c: Ctx, cmd: string, secs: number): Promise<string> {
   return new Promise((res) => {
-    const env = { ...process.env }; delete env.SYOK_API_KEY; delete env.GITHUB_TOKEN;
+    const env = cleanEnv();
     const ch = spawnCommand(cmd, c.root, env, ["ignore", "pipe", "pipe"]);
     let out = "", done = false;
     const add = (d: Buffer) => { out += d.toString(); if (out.length > 400_000) out = out.slice(-200_000); };

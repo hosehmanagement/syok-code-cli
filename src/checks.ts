@@ -4,6 +4,7 @@
 // 2. projectCheck: when the AI says it is finished and it changed files, the project's own check (type-check or linter) runs once.
 //    If it fails, the output goes back to the AI to fix (see checkGate in agent.ts).
 import { spawn, spawnSync } from "node:child_process";
+import { cleanEnv } from "./shell.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Settings } from "./perm.ts";
@@ -19,7 +20,7 @@ export function resetProgramCache() { have.clear(); }
 function run(cmd: string, args: string[], cwd: string, input?: string, ms = 8000): Promise<{ code: number; out: string }> {
   return new Promise((res) => {
     let out = "", done = false;
-    const env = { ...process.env }; delete env.SYOK_API_KEY; delete env.GITHUB_TOKEN; delete env.MODAL_TOKEN_SECRET;
+    const env = cleanEnv();
     let ch;
     try { ch = spawn(cmd, args, { cwd, env, windowsHide: true, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] }); } catch (e: any) { return res({ code: -1, out: String(e?.message || e) }); }
     const add = (d: Buffer) => { if (out.length < 20000) out += d.toString(); };

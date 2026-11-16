@@ -4,7 +4,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, openSync, closeSync, statSync, readSync } from "node:fs";
 import { join } from "node:path";
-import { spawnCommand } from "./shell.ts";
+import { spawnCommand, cleanEnv } from "./shell.ts";
 
 export interface JobMeta { id: number; cmd: string; cwd: string; started: number; runner: number; maxSec: number }
 export interface JobInfo extends JobMeta { state: "running" | "finished" | "lost"; code: number | null }
@@ -49,7 +49,7 @@ export function startJob(root: string, cmd: string, maxSec = 0): number {
 /** The runner process: run the command, log its output, write the exit code. */
 export async function runJobRunner(dir: string): Promise<number> {
   const meta: JobMeta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"));
-  const env = { ...process.env }; delete env.SYOK_API_KEY; delete env.GITHUB_TOKEN;
+  const env = cleanEnv();
   const fd = openSync(join(dir, "out.log"), "a");
   return await new Promise<number>((done) => {
     let finished = false;
