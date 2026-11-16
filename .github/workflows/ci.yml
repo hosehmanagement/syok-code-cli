@@ -11,6 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
       - run: bun test ./test
       - run: bun evals/run.ts --check
   # Windows is tested for real: the shell picker, skills, the Windows safety rules and the skill run are run on a Windows machine.
@@ -19,6 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
       - name: Windows tests (must pass)
         run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts test/bridge.test.ts
       - name: Which shell was picked
@@ -44,6 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
       - name: Build the program and serve it on this machine
         shell: bash
         run: |

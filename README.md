@@ -2,7 +2,7 @@
 
 Syok Code for your own computer: an AI coding agent that reads your project, edits files, runs your tests and fixes what it broke. It talks to **your own Syok AI key**, so automatic key switching (when one provider hits a limit) keeps working in the middle of a long task.
 
-Status: early (v0.9). Built for computers that are fast and stable.
+Status: early (v0.10). Built for computers that are fast and stable.
 
 ## Quick start
 1. Install (one line; you do not need to install anything else first):
@@ -28,6 +28,20 @@ Run one task and exit: `syok -p "fix the failing test" --mode accept-edits`
 - `/undo` restores every file changed in the session.
 - The agent can only touch files inside the folder you started it in.
 - Treat file contents as untrusted: a file can contain text that tries to give the AI instructions.
+
+## Heavy jobs on a rented cloud computer
+Some jobs are too heavy for your own computer (training a model, a long build, a big data crunch). `syok run` sends the job to a computer rented from your own [Modal](https://modal.com) account, shows its output live, brings the results back and switches the computer off.
+
+```
+syok run --on modal -- python train.py
+syok run --on modal --gpu T4 --timeout 120 --out results -- python train.py --epochs 3
+```
+- **One-time setup:** create a Modal account, make an API token (Settings, API Tokens), and set `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` in your terminal. The token goes straight from your computer to Modal, never to Syok. No Syok key is needed for `syok run`.
+- **What is sent:** the files of the current folder. In a git project `.gitignore` is respected. Never sent: `.env` files, key files (`.pem`, `.key`, `id_rsa`...), `node_modules`, `.venv`, `.git`. At most 200 MB. Use `--no-upload` to send nothing.
+- **Options:** `--gpu T4|L4|A10|A100`, `--image python:3.12-slim` (any container image; default is Python, or Node when the folder only has a `package.json`), `--timeout` in minutes (default 60, at most 1440), `--cpu`, `--memory` (MB), `--out <folder>` to bring a results folder back.
+- **Cost:** Modal bills your own account per second while the computer is on. It is switched off when the command ends, when you press Ctrl+C, or when the time limit passes, whichever comes first.
+- **Leave it running:** add `--detach`. Then `syok remote` lists runs, `syok remote logs 1` shows the output, and `syok remote stop 1` brings results back and switches the computer off. A detached computer stays on (and billing) after its command ends, until you stop it or the time limit passes.
+- **Limits:** the job runs in a fresh container, so install what it needs as part of the command (`pip install -r requirements.txt && python train.py`). Results come back only from the `--out` folder.
 
 ## Looking things up on the web
 The AI has two web tools, so it can check current facts, documentation and error messages instead of guessing:

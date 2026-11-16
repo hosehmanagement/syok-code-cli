@@ -46,6 +46,14 @@ Web (the AI can look things up; in ask mode you approve the first search and eac
   --no-web                                     switch web_search and web_fetch off   (or "web": false in .syok/settings.json)
   "allow_hosts": ["python.org"]                in .syok/settings.json: sites that may be read without asking
   EXA_API_KEY=...                              optional: your own Exa key for a more reliable search
+Heavy jobs on a rented cloud computer (your own Modal account; billed to you per second while it is on):
+  syok run --on modal -- python train.py       send this folder, run the command there, show its output live, switch the computer off
+     --gpu T4|L4|A10|A100   --image python:3.12-slim   --timeout 60 (minutes, at most 1440)   --cpu 4   --memory 8192 (MB)
+     --out results          bring the folder "results" back into this project when it ends
+     --no-upload            do not send this folder      --detach   leave it running and come back later
+  syok remote                                  list detached runs
+  syok remote logs <n> [--tail 200]            see the output of a detached run
+  syok remote stop <n>                         bring back results and switch its computer off
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
 Saved jobs (long scripts that keep running after you exit; the AI starts them with job_start):
@@ -109,6 +117,11 @@ if (process.argv[2] === "update") {
   // Needs no API key. Replaces the installed one-file program after checking the download.
   const self = process.argv[1] || ""; let current = ""; try { current = sha256(readFileSync(self)); } catch {}
   const r = await selfUpdate({ self, current }); (r.ok ? console.log : console.error)(r.message); process.exit(r.ok ? 0 : 1);
+}
+if (process.argv[2] === "run" || process.argv[2] === "remote") {
+  // Remote runs need no Syok key: they use your own cloud account (Modal) straight from this computer.
+  const { remoteCommand } = await import("./remote-cli.ts");
+  process.exit(await remoteCommand(process.argv.slice(2)));
 }
 if (["jobs", "logs", "stop"].includes(process.argv[2] ?? "")) {
   // Saved jobs need no API key: they are just files in <project>/.syok/jobs.
