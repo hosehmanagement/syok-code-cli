@@ -13,20 +13,20 @@ const base = "http://x";
 const sorted = (s: Set<string>) => [...s].sort();
 
 test("the tools line: Syok names, Claude Code names and Copilot names all work; unknown names are reported, never guessed", () => {
-  expect(sorted(parseTools("read, search").allowed)).toEqual(["find_files", "finish", "list_files", "read_file", "search"]);
-  expect(sorted(parseTools("Read, Grep, Glob, LS").allowed)).toEqual(["find_files", "finish", "list_files", "read_file", "search"]);
-  expect(sorted(parseTools("['read', 'edit']").allowed)).toEqual(["edit_file", "find_files", "finish", "list_files", "read_file", "search", "write_file"]);
-  expect(sorted(parseTools("- Read - Bash(git diff:*) - WebFetch").allowed)).toEqual(["bg_output", "bg_start", "bg_stop", "find_files", "finish", "job_output", "job_start", "job_stop", "list_files", "read_file", "run_command", "search", "web_fetch"]);
+  expect(sorted(parseTools("read, search").allowed)).toEqual(["find_files", "find_symbol", "finish", "list_files", "outline", "read_file", "search"]);
+  expect(sorted(parseTools("Read, Grep, Glob, LS").allowed)).toEqual(["find_files", "find_symbol", "finish", "list_files", "outline", "read_file", "search"]);
+  expect(sorted(parseTools("['read', 'edit']").allowed)).toEqual(["edit_file", "find_files", "find_symbol", "finish", "list_files", "outline", "read_file", "search", "write_file"]);
+  expect(sorted(parseTools("- Read - Bash(git diff:*) - WebFetch").allowed)).toEqual(["bg_output", "bg_start", "bg_stop", "find_files", "find_symbol", "finish", "job_output", "job_start", "job_stop", "list_files", "outline", "read_file", "run_command", "search", "web_fetch"]);
   expect(sorted(parseTools("read_file, run_command").allowed)).toEqual(["finish", "read_file", "run_command"]);
   const u = parseTools("Read, mcp__github__create_issue, Frobnicate, Task, delegate");
-  expect(u.unknown).toEqual(["mcp__github__create_issue", "Frobnicate"]); expect(u.allowed.has("delegate")).toBe(false); expect(sorted(u.allowed)).toEqual(["find_files", "finish", "list_files", "read_file", "search"]);
+  expect(u.unknown).toEqual(["mcp__github__create_issue", "Frobnicate"]); expect(u.allowed.has("delegate")).toBe(false); expect(sorted(u.allowed)).toEqual(["find_files", "find_symbol", "finish", "list_files", "outline", "read_file", "search"]);
 });
 
 test("a helper file: name, description, instructions, and whether it is read-only", () => {
   const a = parseAgent("---\nname: Code Reviewer\ndescription: Reviews changes\n  for bugs\ntools: Read, Grep\nmodel: sonnet\n---\nYou review code.\n", "x", "project", "/f")!;
   expect(a.name).toBe("code-reviewer"); expect(a.description).toBe("Reviews changes for bugs"); expect(a.prompt).toBe("You review code."); expect(a.readOnly).toBe(true);
   const b = parseAgent("---\ndescription: fixes\n---\nFix things.", "fixer", "project", "/f")!; expect(b.name).toBe("fixer"); expect(b.allowed).toBeUndefined(); expect(b.readOnly).toBe(false);
-  const c = parseAgent("---\ntools: read, edit, shell\nreadonly: true\n---\nLook only.", "looker", "p", "/f")!; expect(c.readOnly).toBe(true); expect(sorted(c.allowed!)).toEqual(["find_files", "finish", "list_files", "read_file", "search"]);
+  const c = parseAgent("---\ntools: read, edit, shell\nreadonly: true\n---\nLook only.", "looker", "p", "/f")!; expect(c.readOnly).toBe(true); expect(sorted(c.allowed!)).toEqual(["find_files", "find_symbol", "finish", "list_files", "outline", "read_file", "search"]);
   const w = parseAgent("---\ntools: read, web\n---\nResearch.", "res", "p", "/f")!; expect(w.readOnly).toBe(true); expect(w.allowed!.has("web_search")).toBe(true);
   const e = parseAgent("---\ntools: read, edit\n---\nEdit.", "ed", "p", "/f")!; expect(e.readOnly).toBe(false);
   expect(parseAgent("---\nname: x\n---\n", "x", "p", "/f")).toBeNull();        // no instructions
@@ -81,7 +81,7 @@ test("a read-only helper gets its own instructions, only its tools, cannot edit 
   const ctx = makeCtx(d, "auto", async () => true, {}, DEFAULT); ctx.agents = loadAgents(d, tmpProject({}));
   const r = await runAgent({ root: d, task: "t", base, key: "k", mode: "auto", fetchImpl: s.f, ctx, profile: { ...DEFAULT, nudgeTests: false } });
   expect(r.summary).toBe("parent done"); expect(readFileSync(join(d, "a.txt"), "utf8")).toBe("x"); expect(r.touched).toEqual([]);
-  const names = s.childReqs[0].tools.map((t: any) => t.function.name).sort(); expect(names).toEqual(["find_files", "finish", "list_files", "read_file", "search"]);
+  const names = s.childReqs[0].tools.map((t: any) => t.function.name).sort(); expect(names).toEqual(["find_files", "find_symbol", "finish", "list_files", "outline", "read_file", "search"]);
   expect(String(s.childReqs[0].messages[0].content)).toContain('You are "reviewer"'); expect(String(s.childReqs[0].messages[0].content)).toContain("You cannot change anything.");
   const blocked = s.childReqs.flatMap((q) => q.messages).filter((m: any) => m.role === "tool").map((m: any) => String(m.content));
   expect(blocked.some((t) => t.includes("edit_file is not available to this helper"))).toBe(true); expect(blocked.some((t) => t.includes("run_command is not available to this helper"))).toBe(true);

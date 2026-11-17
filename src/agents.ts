@@ -10,10 +10,10 @@ import { READONLY, TOOLS, WEB_TOOLS } from "./tools.ts";
 
 export interface Agent { name: string; description: string; prompt: string; allowed?: Set<string>; readOnly: boolean; from: string; file: string; unknownTools: string[] }
 
-const EDIT = ["edit_file", "write_file"], RUN = ["run_command", "bg_start", "bg_output", "bg_stop", "job_start", "job_output", "job_stop"], READ = ["list_files", "read_file", "search", "find_files"], WEB = ["web_search", "web_fetch"];
+const EDIT = ["edit_file", "write_file"], RUN = ["run_command", "bg_start", "bg_output", "bg_stop", "job_start", "job_output", "job_stop"], READ = ["list_files", "read_file", "search", "find_files", "find_symbol", "outline"], WEB = ["web_search", "web_fetch"];
 // Tool names as other tools write them (Claude Code's capitalised names, Copilot's short groups), in Syok's own names.
 const ALIAS: Record<string, string[]> = {
-  read: READ, ls: ["list_files"], glob: ["find_files"], grep: ["search"], search: ["search", "find_files"], codebase: READ, notebookread: ["read_file"],
+  read: READ, ls: ["list_files"], glob: ["find_files"], grep: ["search", "find_symbol"], search: ["search", "find_files", "find_symbol", "outline"], codebase: READ, notebookread: ["read_file"],
   edit: EDIT, multiedit: ["edit_file"], write: ["write_file"], notebookedit: ["edit_file"], editfiles: EDIT,
   bash: RUN, shell: RUN, execute: RUN, terminal: RUN, runcommands: RUN, bashoutput: ["bg_output"], killshell: ["bg_stop"], killbash: ["bg_stop"],
   websearch: ["web_search"], webfetch: ["web_fetch"], web: WEB, fetch: ["web_fetch"],
