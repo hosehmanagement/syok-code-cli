@@ -22,14 +22,18 @@ export const SAFE_WIN = [/^(Get-ChildItem|Get-Content|Get-Location|Get-Item|Sele
 // Commands treated as safe (tests, builds, read-only inspection): run without asking in every mode.
 export const SAFE = [
   /^(ls|pwd|cat|head|tail|wc|echo|grep|rg|find|git (status|diff|log|show|branch)|which|node -v|python3? --version)\b/,
-  /^(npm|pnpm|yarn|bun) (test|run (test|build|lint|check|typecheck))\b/, /^(npx |bunx )?(tsc|eslint|prettier --check)\b/,
-  /^(pytest|python3? -m (pytest|unittest)|go test|cargo (test|build|check)|node --test|make (test|check|build))\b/,
+  /^(npm|pnpm|yarn|bun) (test|run (test|build|lint|check|typecheck|type-check))\b/, /^(npx |bunx )?(tsc|eslint|prettier --check)\b/,
+  /^(pytest|python3? -m (pytest|unittest)|go (test|vet)|cargo (test|build|check)|node --test|make (test|check|build))\b/,
 ];
 export interface Settings { allow?: string[]; deny?: string[];
   /** run_command: default seconds (120) and the most the AI may ask for (600). Hard ceiling 24 hours. */
   timeout_sec?: number; max_timeout_sec?: number;
   /** Web tools (web_search, web_fetch): false switches them off. allow_hosts: sites that may be read without asking (sub-domains included). */
   web?: boolean; allow_hosts?: string[];
+  /** Checks after edits: false switches off the syntax check after each edit and the project check before finishing. check_command: your own project check (for example "npm run typecheck"). */
+  checks?: boolean; check_command?: string;
+  /** Optional prices in US dollars per million tokens, by a piece of the model or provider name, to show an estimated cost: { "gpt-5": { "in": 1.25, "out": 10 } } */
+  prices?: Record<string, { in?: number; out?: number }>;
   /** General terminal mode: not only programming. */
   general?: boolean; hooks?: Record<string, Array<{ match?: string; command: string; timeout_sec?: number }>>; mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> }
 export type Asker = (what: string, detail: string) => Promise<boolean>;

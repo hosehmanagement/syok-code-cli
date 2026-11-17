@@ -1,0 +1,37 @@
+name: codespace live test
+# Runs "syok run --on codespace" against a real GitHub Codespace through the real gh tool.
+# Needs one repository secret, CODESPACE_TOKEN: a GitHub token (classic) with the "codespace" scope.
+# It creates a small Codespace from the public template, tests for a few minutes and deletes it again.
+# The time used comes out of that GitHub account's Codespaces allowance. Skips itself when the secret is not set.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['src/remote-codespace.ts', 'test/live/codespace-live.sh', '.github/workflows/codespace-live.yml']
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.CODESPACE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Create a Codespace for the test
+        id: cs
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "SKIPPED: the CODESPACE_TOKEN secret is not set."; echo "name=" >> "$GITHUB_OUTPUT"; exit 0; fi
+          gh codespace list --json name,state,repository | head -c 600; echo
+          NAME=$(gh codespace create -R syok-code/codespace-template -m basicLinux32gb --idle-timeout 10m --retention-period 1h --default-permissions)
+          echo "created: $NAME"; echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          for i in $(seq 1 30); do if gh codespace ssh -c "$NAME" -- echo ssh-works 2>/dev/null | grep -q ssh-works; then echo "ssh is ready"; break; fi; sleep 10; done
+      - name: Live test of the one-file program (build folders moved away)
+        if: steps.cs.outputs.name != ''
+        run: |
+          bun build src/main.ts --target=bun --minify --outfile "$RUNNER_TEMP/syok.js"
+          cp test/live/codespace-live.sh "$RUNNER_TEMP/codespace-live.sh"
+          mv node_modules "$RUNNER_TEMP/node_modules-moved-away"
+          sh "$RUNNER_TEMP/codespace-live.sh" "$RUNNER_TEMP/syok.js" "${{ steps.cs.outputs.name }}"
+      - name: Delete the test Codespace
+        if: always() && steps.cs.outputs.name != ''
+        run: gh codespace delete -c "${{ steps.cs.outputs.name }}" --force

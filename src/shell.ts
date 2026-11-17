@@ -101,3 +101,10 @@ export function killTree(proc: ChildProcess): void {
 export function shellHint(sh: Shell = currentShell()): string {
   return `\nShell: ${sh.label}. ${sh.hint}`;
 }
+
+/** Environment for anything the AI starts (commands, hooks, jobs, checks): the same as ours, without keys and tokens. */
+export const SECRET_ENV = ["SYOK_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "EXA_API_KEY", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL"];
+export function cleanEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...base }; for (const k of SECRET_ENV) delete env[k];
+  return env;
+}

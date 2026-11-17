@@ -1,6 +1,7 @@
 // Minimal MCP client over stdio (newline-delimited JSON-RPC). Lets Syok Code use local tool servers.
 // Configure in .syok/settings.json: { "mcpServers": { "name": { "command": "node", "args": ["server.js"], "env": {} } } }
 import { spawn, type ChildProcess } from "node:child_process";
+import { cleanEnv } from "./shell.ts";
 export interface McpCfg { command: string; args?: string[]; env?: Record<string, string> }
 export class McpClient {
   proc!: ChildProcess; buf = ""; id = 0; pending = new Map<number, (m: any) => void>(); tools: any[] = []; dead = "";
@@ -15,7 +16,7 @@ export class McpClient {
     });
   }
   async start() {
-    const env = { ...process.env, ...(this.cfg.env || {}) }; delete env.SYOK_API_KEY; delete env.GITHUB_TOKEN;
+    const env = { ...cleanEnv(), ...(this.cfg.env || {}) }; // a server gets only the keys its own settings name
     this.proc = spawn(this.cfg.command, this.cfg.args || [], { cwd: this.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
     this.proc.stdout!.on("data", (d) => {
       this.buf += d; let i: number;

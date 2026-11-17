@@ -20,16 +20,16 @@ test("paths outside the project are refused", async () => {
 });
 test("edit_file exact, unique and missing cases", async () => {
   const { d, c } = mk({ "a.js": "const a = 1;\nconst b = 1;\n" });
-  expect(await runTool(c, "edit_file", { path: "a.js", old_text: "const a = 1;", new_text: "const a = 2;" })).toBe("Edited a.js.");
+  expect(await runTool(c, "edit_file", { path: "a.js", old_text: "const a = 1;", new_text: "const a = 2;" })).toBe("Edited a.js.\nSyntax check (JavaScript syntax): OK.");
   expect(readFileSync(join(d, "a.js"), "utf8")).toContain("const a = 2;");
   expect(await runTool(c, "edit_file", { path: "a.js", old_text: " = ", new_text: "=" })).toContain("matches 2 places");
   expect(await runTool(c, "edit_file", { path: "a.js", old_text: "nothing here", new_text: "x" })).toContain("not found");
-  expect(await runTool(c, "edit_file", { path: "a.js", old_text: " = ", new_text: "=", replace_all: true })).toBe("Edited a.js.");
+  expect(await runTool(c, "edit_file", { path: "a.js", old_text: " = ", new_text: "=", replace_all: true })).toBe("Edited a.js.\nSyntax check (JavaScript syntax): OK.");
 });
 test("fuzzy edit tolerates indentation differences and can be turned off", async () => {
   const files = { "a.py": "def f():\n    x = 1\n    return x\n" };
   const { d, c } = mk(files);
-  expect(await runTool(c, "edit_file", { path: "a.py", old_text: "  x = 1\n  return x", new_text: "    x = 2\n    return x" })).toBe("Edited a.py.");
+  expect(await runTool(c, "edit_file", { path: "a.py", old_text: "  x = 1\n  return x", new_text: "    x = 2\n    return x" })).toMatch(/^Edited a\.py\.(\nSyntax check \(Python syntax\): OK\.)?$/); // the check line appears when Python is installed
   expect(readFileSync(join(d, "a.py"), "utf8")).toContain("x = 2");
   const { c: c2 } = mk(files, "auto", async () => true, { ...DEFAULT, fuzzyEdit: false });
   expect(await runTool(c2, "edit_file", { path: "a.py", old_text: "  x = 1\n  return x", new_text: "q" })).toContain("not found");

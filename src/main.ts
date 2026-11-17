@@ -1,14 +1,14 @@
 #!/usr/bin/env bun
 import { createInterface } from "node:readline/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { runAgent, makeCtx, undoAll, askModel, type Msg } from "./agent.ts";
+import { runAgent, makeCtx, undoAll, askModel, type Msg , emptyUsage, mergeUsage, describeUsage, type Result } from "./agent.ts";
 import { sessionDiff } from "./tools.ts";
 import { colorize } from "./diff.ts";
 import { startMcp } from "./mcp.ts";
 import { buildTask, KINDS, type Kind } from "./tasks.ts";
-import { READONLY } from "./tools.ts";
+import { READONLY, syncSandbox } from "./tools.ts";
 import { pickProfile } from "./profiles.ts";
 import { MODES, type Mode } from "./perm.ts";
 import { loadSkills, addSkill, preview, buildSkillTask, type Skill } from "./skills.ts";
@@ -20,7 +20,7 @@ import { addPlugin, removePlugin, listPlugins, describePlugins, pluginSettings }
 import { extractImages } from "./image.ts";
 import { summarizeHistory } from "./compactor.ts";
 import { reviewTask, openPr, realRun } from "./pr.ts";
-import { sandboxCall, sandboxExec } from "./sandbox.ts";
+import { sandboxCall, sandboxExec, sandboxPut } from "./sandbox.ts";
 import { runJobRunner, describeJobs, jobLog, stopJob } from "./jobs.ts";
 import { selfUpdate, sha256 } from "./update.ts";
 
@@ -32,6 +32,7 @@ const HELP = `Syok Code (command line)
 Usage:
   syok                       chat in the current folder
   syok -p "fix the failing test"   run one task and print the result
+  syok -p "task" --stay            run one task, then stay in the chat
 Coding modes (work in 30+ languages, and check their own work):
   syok gen "a function that checks a palindrome" --lang python [--out file]   plain words -> working code
   syok translate utils.py --to go                 same behaviour in another language (new file beside the old one)
@@ -51,9 +52,19 @@ Heavy jobs on a rented cloud computer (your own Modal account; billed to you per
      --gpu T4|L4|A10|A100   --image python:3.12-slim   --timeout 60 (minutes, at most 1440)   --cpu 4   --memory 8192 (MB)
      --out results          bring the folder "results" back into this project when it ends
      --no-upload            do not send this folder      --detach   leave it running and come back later
+     (being tested, not switched on yet: --on codespace --codespace <name> runs it on your own GitHub Codespace)
   syok remote                                  list detached runs
   syok remote logs <n> [--tail 200]            see the output of a detached run
   syok remote stop <n>                         bring back results and switch its computer off
+Checks after edits (on by default):
+  every edit is followed by a fast syntax check of that file; before finishing, the project's own check runs once
+  (the "typecheck", "check" or "lint" script in package.json, cargo check, or go vet) and failures go back to the AI to fix
+  --no-checks                                  switch both off   (or "checks": false in .syok/settings.json)
+  "check_command": "npm run typecheck"         in .syok/settings.json: your own project check
+Usage: after each task you see tokens in and out and which provider answered; /usage shows the session total.
+  "prices": { "gpt-5": { "in": 1.25, "out": 10 } }   in .syok/settings.json: US dollars per million tokens, for a cost estimate
+GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
+  syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
 Saved jobs (long scripts that keep running after you exit; the AI starts them with job_start):
@@ -74,6 +85,8 @@ GitHub:
   syok review <pull request number or link> [--comment]   read-only review of a pull request (needs the gh program)
   syok pr "title"                                          commit your changes to a branch, push it and open a pull request (asks first)
 Isolation: dangerous commands are always blocked. For real isolation use the Daytona sandbox:  syok sandbox start owner/repo | status | stop   then add --sandbox
+  With --sandbox, commands run in the sandbox's copy of your GitHub repository and every file the AI edits is copied there too.
+  The sandbox starts from what is on GitHub, so push your own uncommitted changes first if the commands need them.
 Scripts and CI: syok -p "task" --json   or pipe the task in:  echo "task" | syok -p -
 Options:
   --cwd <folder>        project folder (default: current folder)
@@ -90,7 +103,7 @@ Options:
   --json                print the result as JSON (for tests and scripts)
 Setup: set SYOK_BASE_URL (your Syok address) and SYOK_API_KEY (a syk_ key from Syok > Developer API),
 or put {"base":"...","key":"..."} in ~/.syok/config.json.
-In chat: /skills  /skill <name> <task>  (or /<name> <task>)  /gen /translate /debug /explain /test (same as above)  /diff (show every change so far)  /undo  /mode <m>  /model <m>  /jobs  /help  /exit
+In chat: /skills  /skill <name> <task>  (or /<name> <task>)  /gen /translate /debug /explain /test (same as above)  /diff (show every change so far)  /undo  /mode <m>  /model <m>  /jobs  /usage (tokens and providers this session)  /help  /exit
 Extras (in <project>/.syok/settings.json):
   "hooks": { "PreToolUse": [{"match":"edit_file|write_file","command":"./check.sh"}], "PostToolUse": [...], "Stop": [{"command":"npm test"}] }
       your command gets the event as JSON on its input; exit code 2 blocks the action (or sends the message back to the AI for Stop)
@@ -134,6 +147,29 @@ if (["jobs", "logs", "stop"].includes(process.argv[2] ?? "")) {
 }
 const cfg = readJson(join(homedir(), ".syok", "config.json"));
 const base = process.env.SYOK_BASE_URL || cfg.base || "", key = process.env.SYOK_API_KEY || cfg.key || "";
+if (process.argv[2] === "github-action") {
+  // Writes the workflow file that lets people write "@syok ..." in issues and pull requests. Needs no key.
+  const { writeWorkflow } = await import("./action.ts"); const aroot = resolve(arg("--cwd", process.cwd()));
+  const r = writeWorkflow(aroot, has("--force")); (r.ok ? console.log : console.error)(r.message); process.exit(r.ok ? 0 : 2);
+}
+if (process.argv[2] === "action") {
+  // Runs inside GitHub Actions (see: syok github-action). A missing key is answered with a comment, so it is handled in there.
+  const { runAction } = await import("./action.ts"); const aroot = resolve(arg("--cwd", process.cwd()));
+  const m = arg("--model", "syok-coder");
+  const r = await runAction({
+    run: realRun, log: (x) => console.log(x), env: { ...process.env, SYOK_BASE_URL: base, SYOK_API_KEY: key }, root: aroot,
+    agent: async (task, o) => {
+      const st = pluginSettings(aroot, readJson(join(aroot, ".syok", "settings.json"))); const pf = pickProfile(m, undefined, {});
+      const c = makeCtx(aroot, "auto", async () => false, st, pf);
+      c.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
+      if (o.readOnly) c.allowed = READONLY;
+      const res = await runAgent({ root: aroot, task, base, key, model: m, mode: "auto", settings: st, profile: pf, ctx: c, log: (x) => console.log(x) });
+      c.bg.stopAll();
+      return { summary: res.summary, stopped: res.stopped, touched: res.touched, usageLine: describeUsage(res.usage, st.prices), check: res.check };
+    },
+  });
+  console.log("Result: " + r.did); process.exit(r.code);
+}
 if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok --help"); process.exit(2); }
 const root = resolve(arg("--cwd", process.cwd()));
 let model = arg("--model", "syok-coder"), mode = arg("--mode", "ask") as Mode;
@@ -159,7 +195,15 @@ process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exi
 const onToken = !JSON_OUT && !has("--no-stream") ? (s: string) => process.stdout.write(s) : undefined;
 ctx.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
 if (has("--no-web")) settings.web = false;
-if (has("--sandbox")) ctx.sandbox = (cmd, secs) => sandboxExec({ base, key }, cmd, secs);
+if (has("--no-checks")) settings.checks = false;
+// What this whole session used (every task, skill and helper added up); shown by /usage and after each task.
+const sessionUsage = emptyUsage();
+function report(r: Result, extra = ""): string {
+  mergeUsage(sessionUsage, r.usage);
+  const chk = r.check ? (r.check.passed === true ? `; project check passed (${r.check.command})` : r.check.passed === false ? `; PROJECT CHECK STILL FAILING (${r.check.command})` : `; project check not run (${r.check.command})`) : "";
+  return `(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"}${extra}${chk})\n(${describeUsage(r.usage, settings.prices)})`;
+}
+if (has("--sandbox")) { ctx.sandbox = (cmd, secs) => sandboxExec({ base, key }, cmd, secs); ctx.sandboxPut = (rel, content) => sandboxPut({ base, key }, rel, content); }
 const resumeRef = has("--resume") ? (arg("--resume").startsWith("-") ? "" : arg("--resume")) : "";
 const resumed = has("--continue") || has("--resume") ? loadSession(root, resumeRef || undefined) : null;
 if ((has("--continue") || has("--resume")) && !resumed) { console.error("No saved chat to continue. Chats are saved in .syok/sessions."); process.exit(2); }
@@ -175,11 +219,11 @@ async function turn(text: string) {
   try {
     const r = await runAgent({ root, task: im.text, images: im.images, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken });
     history = r.messages; persist();
-    console.log("\n" + r.summary + "\n(" + r.steps + " steps, files changed: " + (r.touched.join(", ") || "none") + ")");
+    console.log("\n" + r.summary + "\n" + report(r));
   } catch (e: any) { console.log("Error: " + e.message); }
 }
 async function readStdin(): Promise<string> { const ch: Buffer[] = []; for await (const c of process.stdin) ch.push(c as Buffer); return Buffer.concat(ch).toString("utf8").trim(); }
-const VALUE_FLAGS = new Set(["--lang", "--to", "--out", "--cwd", "--model", "--mode", "--profile", "--max-steps", "-p"]);
+const VALUE_FLAGS = new Set(["--lang", "--to", "--out", "--cwd", "--model", "--mode", "--profile", "--max-steps", "-p", "--task-file"]);
 function words(s: string) { return (s.match(/"[^"]*"|'[^']*'|\S+/g) || []).map((w) => w.replace(/^(["'])(.*)\1$/, "$2")); }
 function modeTask(kind: Kind, toks: string[]) {
   const pos: string[] = []; const f: Record<string, string> = {};
@@ -243,6 +287,15 @@ if (process.argv[2] === "skills" || process.argv[2] === "skill") {
 }
 const sub = process.argv[2] as Kind;
 let prompt = arg("-p"), readOnlyRun = false;
+// --task-file: the task is read from a file (and the file removed). Used by the editor extension so that no character of the task passes through a shell.
+const taskFile = arg("--task-file");
+if (taskFile) {
+  try { prompt = readFileSync(taskFile, "utf8").trim(); } catch (e: any) { console.error("Could not read the task file " + taskFile + ": " + e.message); process.exit(2); }
+  try { rmSync(taskFile, { force: true }); } catch {}
+  if (!prompt) { console.error("The task file is empty."); process.exit(2); }
+}
+// --stay: after the task, stay in the chat instead of exiting (needs a terminal).
+const stay = has("--stay") && !!rl && !JSON_OUT;
 if (KINDS.includes(sub)) {
   const b = modeTask(sub, process.argv.slice(3));
   if (b.error) { console.error(b.error); process.exit(2); }
@@ -254,9 +307,10 @@ if (prompt) {
   const im = extractImages(root, prompt); im.notes.forEach((n) => console.error("(" + n + ")"));
   const r = await runAgent({ root, task: im.text, images: im.images, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken });
   history = r.messages; persist();
-  if (JSON_OUT) console.log(JSON.stringify({ summary: r.summary, session: sessionId, steps: r.steps, tokens: r.tokens, touched: r.touched, stopped: r.stopped, ranTests: r.ranTests, commands: r.commands, declined: r.declined }));
-  else console.log("\n" + r.summary + `\n(${r.steps} steps, ${r.tokens} tokens, files changed: ${r.touched.join(", ") || "none"})`);
-  rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1);
+  if (JSON_OUT) console.log(JSON.stringify({ summary: r.summary, session: sessionId, steps: r.steps, tokens: r.tokens, touched: r.touched, stopped: r.stopped, ranTests: r.ranTests, commands: r.commands, declined: r.declined, usage: r.usage, check: r.check ?? null }));
+  else console.log("\n" + r.summary + "\n" + report(r));
+  if (!stay) { rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1); }
+  ctx.allowed = undefined;
 }
 if (!rl) { console.error("No task given. Use -p \"task\" or run in a terminal."); process.exit(2); }
 console.log(`Syok Code in ${root}  (mode: ${mode}, model: ${model}). Type /help.`);
@@ -294,6 +348,7 @@ for (;;) {
     const rw = rewindTo(ctx, cps, n);
     if (!rw) { console.log("No checkpoint " + n + ".\n" + describeCheckpoints(cps)); continue; }
     history = history && rw.msgLen > 0 ? history.slice(0, rw.msgLen) : undefined; persist();
+    if (rw.restored.length && ctx.sandboxPut) console.log([...new Set(await syncSandbox(ctx, rw.restored))].join("\n"));
     console.log("Rewound to checkpoint " + n + ". " + (rw.restored.length ? "Restored: " + rw.restored.join(", ") : "No files needed restoring.")); continue;
   }
   if (line === "/compact" || line.startsWith("/compact ")) {
@@ -320,7 +375,8 @@ for (;;) {
   const cm = /^\/([\w-]+)(?=\s|$)\s*(.*)$/.exec(line);
   const custom = cm ? loadCommands(root).get(cm[1].toLowerCase()) : undefined;
   if (cm && (cm[1] === "init" || cm[1] === "image" || custom)) { await turn(cm[1] === "init" ? INIT_TASK : cm[1] === "image" ? cm[2] : renderCommand(custom!, cm[2])); continue; }
-  if (line === "/undo") { const d = undoAll(ctx); console.log(d.length ? "Restored: " + d.join(", ") : "Nothing to undo."); continue; }
+  if (line === "/usage" || line === "/cost") { console.log("This session so far: " + describeUsage(sessionUsage, settings.prices) + (settings.prices ? "" : "\n(No money amount: Syok cannot know each provider's price. Add \"prices\" to .syok/settings.json to get an estimate.)")); continue; }
+  if (line === "/undo") { const d = undoAll(ctx); console.log(d.length ? "Restored: " + d.join(", ") : "Nothing to undo."); if (d.length && ctx.sandboxPut) console.log([...new Set(await syncSandbox(ctx, d))].join("\n")); continue; }
   if (line === "/mode" || line.startsWith("/mode ")) { const w = line.slice(5).trim() as Mode; const nm = w || MODES[(MODES.indexOf(mode) + 1) % MODES.length]; if (!MODES.includes(nm)) { console.log("Modes: " + MODES.join(", ")); continue; } mode = nm; ctx.mode = nm; console.log("Mode: " + nm); continue; }
   if (line.startsWith("/model ")) { model = line.slice(7).trim(); console.log("Model: " + model); continue; }
   const sm = /^\/skills?(?=\s|$)\s*(.*)$/.exec(line), sx = /^\/([\w-]+)(?=\s|$)\s*(.*)$/.exec(line);

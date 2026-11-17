@@ -14,3 +14,17 @@ export async function sandboxExec(cfg: SandboxCfg, command: string, secs: number
   const out = String(d.output ?? d.result ?? "");
   return out.trim() + (d.exitCode !== undefined ? "\n[exit code " + d.exitCode + "]" : "");
 }
+/** Copy one edited file into the sandbox's copy of the project, so sandbox commands see the edit. Returns a short note for the AI. */
+export async function sandboxPut(cfg: SandboxCfg, rel: string, content: string | null): Promise<string> {
+  const path = rel.replace(/\\/g, "/");
+  if (content === null) { // the file was removed locally (an undo of a new file): remove it there too
+    const r = await sandboxCall(cfg, "exec", { cmd: "rm -f -- '" + path.replace(/'/g, "'\\''") + "'" });
+    return r.ok ? "(also removed in the sandbox)" : sandboxProblem(r, path);
+  }
+  const r = await sandboxCall(cfg, "put", { path, content });
+  return r.ok ? "(also written in the sandbox)" : sandboxProblem(r, path);
+}
+function sandboxProblem(r: { status: number; data: any }, path: string): string {
+  if ([401, 404, 405].includes(r.status)) return "WARNING: this edit is NOT in the sandbox: your Syok version cannot copy edits into the sandbox yet, so sandbox commands still see the old " + path + ". Update your Syok (load the dashboard once).";
+  return "WARNING: this edit is NOT in the sandbox (HTTP " + r.status + ": " + String(r.data?.message || r.data?.error?.message || r.data?.error || "").slice(0, 200) + "), so sandbox commands still see the old " + path + ".";
+}
