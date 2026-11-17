@@ -1,0 +1,71 @@
+name: jcode live test
+# Checks, with a real AI through your Syok key, that the jcode harness (github.com/1jehuang/jcode) works with Syok as its
+# AI provider: jcode is installed with its own installer, Syok is added as an OpenAI-compatible provider, and jcode is
+# asked to fix a small bug. The key is never written to a file: jcode is told to read it from the SYOK_API_KEY variable.
+# jcode's usage reporting is switched off.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model or preset"
+        default: "syok-auto"
+  pull_request:
+    paths:
+      - ".github/workflows/jcode-live.yml"
+permissions:
+  contents: read
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      JCODE_NO_TELEMETRY: "1"
+      DO_NOT_TRACK: "1"
+      MODEL: ${{ inputs.model || 'syok-auto' }}
+    steps:
+      - name: Install jcode with its own installer
+        run: |
+          curl -fsSL https://jcode.sh/install | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Version, and usage reporting off
+        run: |
+          jcode --version
+          jcode telemetry disable
+          jcode telemetry status
+      - name: Add Syok as jcode's AI provider
+        env:
+          SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+        run: |
+          if [ -z "$SYOK_BASE_URL" ] || [ -z "$SYOK_API_KEY" ]; then echo "the Syok secrets are not set"; exit 1; fi
+          base="$(printf '%s' "$SYOK_BASE_URL" | sed -e 's#/*$##' -e 's#/v1$##')/v1"
+          jcode provider add syok --base-url "$base" --model "$MODEL" --api-key-env SYOK_API_KEY --set-default
+          if grep -rIl -- "$SYOK_API_KEY" "$HOME/.jcode" "$HOME/.config/jcode" 2>/dev/null | grep -q .; then echo "the key was written to a file"; exit 1; fi
+          echo "the key is not in any jcode file"
+      - name: jcode's own connection check against Syok
+        env:
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+        run: jcode --provider-profile syok auth-test
+      - name: A small project with one bug
+        run: |
+          mkdir -p work && cd work
+          printf 'function total(items) {\n  let sum = 0;\n  for (let i = 1; i < items.length; i++) sum += items[i].price * items[i].qty;\n  return sum;\n}\nmodule.exports = { total };\n' > cart.js
+          printf 'const assert = require("node:assert");\nconst { total } = require("./cart.js");\nassert.strictEqual(total([{ price: 5, qty: 2 }, { price: 3, qty: 1 }]), 13);\nassert.strictEqual(total([{ price: 7, qty: 3 }]), 21);\nassert.strictEqual(total([]), 0);\nconsole.log("all tests passed");\n' > test.js
+          sha256sum test.js > ../test.sha
+          if node test.js; then echo "the test should fail before the fix"; exit 1; fi
+      - name: Ask jcode to fix it
+        env:
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+        run: |
+          jcode --provider-profile syok run -C work --no-update "Running 'node test.js' in this folder fails. Find the bug in cart.js and fix it so the test passes. Do not change test.js. Run the test to confirm." 2>&1 | tee run.log
+      - name: Check the result (strict)
+        run: |
+          cd work
+          sha256sum -c ../test.sha
+          node test.js | grep -q "all tests passed"
+          grep -q "let i = 0" cart.js || { echo "cart.js was changed in an unexpected way:"; cat cart.js; exit 1; }
+          echo "--- cart.js after jcode:"; cat cart.js
+      - name: Summary
+        if: always()
+        run: |
+          { echo '```'; tail -40 run.log 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
