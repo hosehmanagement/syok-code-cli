@@ -42,10 +42,15 @@ jobs:
           jcode provider add syok --base-url "$base" --model "$MODEL" --api-key-env SYOK_API_KEY --set-default
           if grep -rIl -- "$SYOK_API_KEY" "$HOME/.jcode" "$HOME/.config/jcode" 2>/dev/null | grep -q .; then echo "the key was written to a file"; exit 1; fi
           echo "the key is not in any jcode file"
-      - name: jcode's own connection check against Syok
+      # jcode's own "auth-test" command is not used here: in jcode 0.95.0 it ignores the address of a named profile and
+      # asks a different service, so it fails with any custom provider. A plain question through the profile is the check.
+      - name: Connection check, one question through Syok
         env:
           SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
-        run: jcode --provider-profile syok auth-test
+        run: |
+          mkdir -p hello
+          jcode --provider-profile syok run -C hello --no-update "Reply with exactly this word and nothing else: SYOK_JCODE_OK" 2>&1 | tee hello.log
+          grep -q "SYOK_JCODE_OK" hello.log
       - name: A small project with one bug
         run: |
           mkdir -p work && cd work
