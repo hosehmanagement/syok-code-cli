@@ -151,10 +151,13 @@ export function buildSkillTask(sk: Skill, request: string): string {
   const need = sk.needsRun
     ? "This skill is about running commands. Run the commands it needs yourself with run_command, one at a time, read each result, and fix problems and continue. Do not only describe commands and do not ask the user to run them."
     : "Follow the skill's method.";
+  // Skill files written for a command-line tool are sometimes out of date with the tool that is really installed.
+  const tool = "The installed program is the truth, not this text. If a command from the skill fails with \"No such command\", \"no such option\" or a usage message, do not retry variations by guessing: run the tool's own --help, then the --help of the exact subcommand, and follow what they print. In a usage line like \"tool [OPTIONS] COMMAND [ARGS]\", the options listed for the tool itself (for example --project or --json) go BEFORE the command name, and each command is a fresh start: a tool that needs a file or project must be given it again on every command.";
   return [
     `Run the skill "${sk.name}" now.`,
     request ? `What the user wants: ${request}` : "The user gave no extra details: use the project folder and sensible defaults, and do not stop to ask.",
     need,
+    ...(sk.needsRun ? [tool] : []),
     "If a command is blocked or the user says no, say exactly which command and why in your final summary. Never claim you ran something you did not.",
     "",
     `=== Skill: ${sk.name} ===`,

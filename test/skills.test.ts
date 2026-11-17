@@ -112,3 +112,10 @@ test("front matter values written on the next lines (\"name: >-\"), as CLI-Anyth
   // a value that really is just ">" followed by text on the same line is kept
   expect(splitFront("---\nname: a\ndescription: > 5 items\n---\nx").meta.description).toBe("> 5 items");
 });
+
+test("a skill that runs commands tells the AI to trust the installed tool's own help over the skill text; a guidance-only skill does not", () => {
+  const run = buildSkillTask(parseSkill("# t\n```bash\nmytool project new\n```\n", "t"), "do it");
+  expect(run).toContain("The installed program is the truth"); expect(run).toContain("go BEFORE the command name");
+  const guide = buildSkillTask(parseSkill("# style\nWrite short sentences.\n", "style"), "");
+  expect(guide).not.toContain("The installed program is the truth");
+});
