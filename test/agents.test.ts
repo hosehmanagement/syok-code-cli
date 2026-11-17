@@ -120,6 +120,6 @@ test("a name that is not a helper is answered with the list, and nothing runs", 
 
 test("syok agents lists them without a key", () => {
   const d = tmpProject({ ".syok/agents/reviewer.md": "---\ndescription: Reviews changes\ntools: read, Frobnicate\n---\nReview." });
-  const r = spawnSync("bun", [join(import.meta.dir, "..", "src", "main.ts"), "agents", "--cwd", d], { encoding: "utf8", env: { PATH: process.env.PATH || "", HOME: d, USERPROFILE: d } });
+  const r = spawnSync("bun", [join(import.meta.dir, "..", "src", "main.ts"), "agents", "--cwd", d], { encoding: "utf8", env: { ...process.env, HOME: d, USERPROFILE: d } });
   expect(r.status).toBe(0); expect(r.stdout).toContain("reviewer  [read-only]  Reviews changes"); expect(r.stdout).toContain("not understood in its tools line (left out): Frobnicate");
 });

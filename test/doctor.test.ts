@@ -98,7 +98,7 @@ test("version check: same checksum is up to date, a different one points to syok
 test("the real command: exit code 0 when fine, 1 with a problem, works with no key at all, --json is JSON, key never printed", async () => {
   const s = server("good"); const d = tmpProject({}); const main = join(import.meta.dir, "..", "src", "main.ts");
   // not spawnSync: the stand-in server lives in this process and must be able to answer while the command runs
-  const run = (args: string[], env: Record<string, string>) => new Promise<{ status: number | null; stdout: string; stderr: string }>((res) => { const p = spawn("bun", [main, ...args, "--cwd", d], { env: { PATH: process.env.PATH || "", HOME: d, USERPROFILE: d, ...env }, stdio: ["ignore", "pipe", "pipe"] }); let o = "", e = ""; p.stdout.on("data", (x) => (o += x)); p.stderr.on("data", (x) => (e += x)); p.on("exit", (c) => res({ status: c, stdout: o, stderr: e })); });
+  const run = (args: string[], env: Record<string, string>) => new Promise<{ status: number | null; stdout: string; stderr: string }>((res) => { const p = spawn("bun", [main, ...args, "--cwd", d], { env: { ...process.env, SYOK_BASE_URL: "", SYOK_API_KEY: "", SYOK_SITE: "http://127.0.0.1:9", HOME: d, USERPROFILE: d, ...env }, stdio: ["ignore", "pipe", "pipe"] }); let o = "", e = ""; p.stdout.on("data", (x) => (o += x)); p.stderr.on("data", (x) => (e += x)); p.on("exit", (c) => res({ status: c, stdout: o, stderr: e })); });
   try {
     const good = { SYOK_BASE_URL: s.base, SYOK_API_KEY: KEY };
     const a = await run(["doctor"], good); expect(a.stdout).toContain("OK    AI answer"); expect(a.status).toBe(0); expect(a.stdout + a.stderr).not.toContain(KEY);
