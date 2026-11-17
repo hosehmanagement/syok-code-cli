@@ -9,6 +9,7 @@ import { Bg } from "./bg.ts";
 import { startJob, jobLog, stopJob, describeJobs } from "./jobs.ts";
 import { webFetch, webSearch, checkUrl, hostOf, type WebDeps } from "./web.ts";
 import { quickCheck, quickLine } from "./checks.ts";
+import { agentsHint, loadAgents, type Agent } from "./agents.ts";
 
 /** Seconds a run_command may take: the AI's request, limited by the user's settings (default max 10 minutes, hard ceiling 24 hours). */
 export function commandTimeout(s: Settings, asked?: number): number {
@@ -37,7 +38,7 @@ export const TOOLS = [
   fn("job_stop", "Stop a saved job (and everything it started).", { id: { type: "integer" } }, ["id"]),
   fn("web_search", "Search the web. Returns a numbered list of titles, addresses and short snippets. Use it for current facts, documentation, error messages and library versions you are not sure about; then read the best page with web_fetch.", { query: { type: "string" }, max_results: { type: "integer" } }, ["query"]),
   fn("web_fetch", "Read one web page (http or https) as plain text. Long pages come in parts: the reply says which characters are shown and the start value for the next part. Never put secrets or the user's private data in the address.", { url: { type: "string" }, start: { type: "integer" }, max_chars: { type: "integer" } }, ["url"]),
-  fn("delegate", "Hand a sub-task to a helper with a fresh, empty context so it does not fill your memory. role 'explorer' (default) is read-only: use it to search or read a lot and get a short answer; several explorers in one message run in parallel. role 'worker' may edit files and run commands; use it for one self-contained change. Give a complete, specific task.", { task: { type: "string" }, role: { type: "string", enum: ["explorer", "worker"] } }, ["task"]),
+  fn("delegate", "Hand a sub-task to a helper with a fresh, empty context so it does not fill your memory. role 'explorer' (default) is read-only: use it to search or read a lot and get a short answer; several explorers in one message run in parallel. role 'worker' may edit files and run commands; use it for one self-contained change. Give a complete, specific task.", { task: { type: "string" }, role: { type: "string", description: "explorer, worker, or the name of one of the user's helpers" } }, ["task"]),
   fn("finish", "Call when the task is done (or cannot be done). Give a short plain summary.", { summary: { type: "string" } }, ["summary"]),
 ];
 
@@ -46,6 +47,7 @@ export const READONLY = new Set(["list_files", "read_file", "search", "find_file
 export function toolDefs(c: Ctx): any[] {
   let t: any[] = TOOLS.filter((x) => !c.allowed || c.allowed.has(x.function.name));
   if (c.depth > 0) t = t.filter((x) => x.function.name !== "delegate");
+  else if (c.agents?.length) t = t.map((x) => x.function.name === "delegate" ? { ...x, function: { ...x.function, description: x.function.description + agentsHint(c.agents!) } } : x);
   if (c.settings.web === false) t = t.filter((x) => !WEB_TOOLS.has(x.function.name));
   return c.allowed ? t : [...t, ...c.mcp.flatMap((m) => m.defs())];
 }
@@ -59,9 +61,9 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string> }
+export interface Ctx { agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string> }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
-  return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false } };
+  return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false }, agents: settings.agents === false ? [] : loadAgents(resolve(root)) };
 }
 function safePath(c: Ctx, p: string): { abs: string; rel: string } {
   const abs = resolve(c.root, p || ".");

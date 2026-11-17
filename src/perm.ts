@@ -26,6 +26,8 @@ export const SAFE = [
   /^(pytest|python3? -m (pytest|unittest)|go (test|vet)|cargo (test|build|check)|node --test|make (test|check|build))\b/,
 ];
 export interface Settings { allow?: string[]; deny?: string[];
+  /** Custom helpers (.syok/agents and the files of other tools): false switches them off. */
+  agents?: boolean;
   /** run_command: default seconds (120) and the most the AI may ask for (600). Hard ceiling 24 hours. */
   timeout_sec?: number; max_timeout_sec?: number;
   /** Web tools (web_search, web_fetch): false switches them off. allow_hosts: sites that may be read without asking (sub-domains included). */

@@ -80,6 +80,9 @@ Chats, plans and checkpoints:
   syok --continue | --resume [number|id]   pick up a saved chat (every chat is saved in .syok/sessions); syok sessions lists them
   --mode plan           planning only: it explores and writes a plan, and nothing changes until you approve
   In chat: /plan <task>  /compact [focus]  /resume [n]  /sessions  /checkpoint [name]  /checkpoints  /rewind [n]  /init  /image <file> <question>  (or write @shot.png in a message)
+Your own helpers (custom agents):
+  .syok/agents/<name>.md   a helper with its own instructions and tools ("tools: read, search" makes it read-only); syok agents lists them
+  files made for Claude Code (.claude/agents) and GitHub Copilot (.github/agents/*.agent.md) are used as they are
 Your own commands and plugins:
   .syok/commands/<name>.md becomes /<name> ($ARGUMENTS = what you type after it); syok commands lists them
   syok plugin add <owner/repo|folder> | list | remove <name>      bundles of skills, commands and hooks
@@ -171,6 +174,11 @@ if (process.argv[2] === "action") {
     },
   });
   console.log("Result: " + r.did); process.exit(r.code);
+}
+if (process.argv[2] === "agents") {
+  // Lists the custom helpers found for this project. Needs no key.
+  const { loadAgents, describeAgents } = await import("./agents.ts");
+  console.log(describeAgents(loadAgents(resolve(arg("--cwd", process.cwd()))))); process.exit(0);
 }
 if (process.argv[2] === "doctor") {
   // A health check. It runs with a missing address or key too, because finding that is its job.
@@ -337,6 +345,7 @@ for (;;) {
     catch (e: any) { console.log("Error: " + e.message); } finally { ctx.allowed = undefined; }
     continue;
   }
+  if (line === "/agents") { const { describeAgents } = await import("./agents.ts"); console.log(describeAgents(ctx.agents || [])); continue; }
   if (line === "/diff") { const d = sessionDiff(ctx); console.log(d ? colorize(d) : "No changes yet."); continue; }
   if (line === "/jobs") { console.log(ctx.bg.list() + "\nSaved jobs (keep running after you exit):\n" + describeJobs(root)); continue; }
   if (line === "/sessions") { console.log(describeSessions(root)); continue; }
