@@ -65,6 +65,8 @@ Usage: after each task you see tokens in and out and which provider answered; /u
   "prices": { "gpt-5": { "in": 1.25, "out": 10 } }   in .syok/settings.json: US dollars per million tokens, for a cost estimate
 GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
   syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
+Checking your setup:
+  syok doctor                                  check the address, the key, a real AI answer and the programs Syok Code uses
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
 Saved jobs (long scripts that keep running after you exit; the AI starts them with job_start):
@@ -170,7 +172,13 @@ if (process.argv[2] === "action") {
   });
   console.log("Result: " + r.did); process.exit(r.code);
 }
-if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok --help"); process.exit(2); }
+if (process.argv[2] === "doctor") {
+  // A health check. It runs with a missing address or key too, because finding that is its job.
+  const { doctor, describeDoctor } = await import("./doctor.ts");
+  const r = await doctor({ base, key, root: resolve(arg("--cwd", process.cwd())), model: arg("--model", "syok-coder"), self: process.argv[1] || "" });
+  console.log(JSON_OUT ? JSON.stringify(r) : describeDoctor(r)); process.exit(r.ok ? 0 : 1);
+}
+if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok doctor   (it says what is missing and how to set it)"); process.exit(2); }
 const root = resolve(arg("--cwd", process.cwd()));
 let model = arg("--model", "syok-coder"), mode = arg("--mode", "ask") as Mode;
 if (!MODES.includes(mode)) { console.error("Unknown mode. Use one of: " + MODES.join(", ")); process.exit(2); }
