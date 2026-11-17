@@ -138,6 +138,7 @@ export const WORKFLOW = `name: Syok Code
 # Write "@syok <what you want done>" in an issue or a pull request and Syok Code does it here in GitHub's cloud.
 # - On an issue it opens a pull request with the change. On a pull request it commits to that pull request.
 # - Only owners, members and collaborators of this repository can start it.
+# - The commands it runs are confined: they cannot write outside the checked-out project or read the keys of this job.
 # Needs two repository secrets (Settings > Secrets and variables > Actions): SYOK_BASE_URL and SYOK_API_KEY.
 # To let it open pull requests: Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests".
 on:
@@ -166,6 +167,10 @@ jobs:
         run: |
           curl -fsSL https://syok-ai.com/syok-code/install.sh | sh
           echo "$HOME/.syok/bin" >> "$GITHUB_PATH"
+      - name: Let Syok Code confine the commands it runs
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Do what was asked
         env:
           SYOK_BASE_URL: \${{ secrets.SYOK_BASE_URL }}

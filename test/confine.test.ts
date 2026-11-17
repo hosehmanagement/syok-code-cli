@@ -13,6 +13,7 @@ import { DEFAULT } from "../src/profiles.ts";
 const all = () => true;
 test("the plan: Windows is refused, the home folder is refused, key folders are hidden, caches stay writable", () => {
   expect((planConfine({ root: "C:\\p", platform: "win32" }) as any).problem).toContain("not available on Windows");
+  expect((planConfine({ root: "C:\\p", platform: "win32" }) as any).problem).toContain("inside WSL");
   expect((planConfine({ root: "/home/me", home: "/home/me", platform: "linux", exists: all, real: (p) => p }) as any).problem).toContain("needs a project folder");
   expect((planConfine({ root: "/", home: "/home/me", platform: "linux", exists: all, real: (p) => p }) as any).problem).toContain("needs a project folder");
   const have = new Set(["/home/me/.ssh", "/home/me/.netrc", "/home/me/.npm", "/home/me/.syok/config.json", "/home/me/p/.git/hooks", "/home/me/p/.syok/settings.json"]);
@@ -42,6 +43,7 @@ test("the Mac rule file: writes denied except the project and temp, key folders 
   expect(p).toContain('(deny file-write* (subpath "/Users/me/my \\"proj\\"/.git/hooks"))'); expect(p).toContain('(deny file-read* file-write* (subpath "/Users/me/.ssh"))'); expect(lines.at(-1)).toBe("(deny network*)");
   expect(lines.indexOf("(deny file-write*)")).toBeLessThan(lines.findIndex((l) => l.startsWith("(allow file-write* (subpath")));
   expect(macProfile({ kind: "sandbox-exec", root: "/p", network: true, home: "/h", write: [], hide: [], lock: [] })).not.toContain("network");
+  expect(p).toContain("(deny process-info*)\n(allow process-info* (target self))");
   const w = confineArgv({ kind: "sandbox-exec", root: "/p", network: true, home: "/h", write: [], hide: [], lock: [] }, "bash", ["-lc", "x"], "/p"); expect(w.exe).toBe("sandbox-exec"); expect(w.args[0]).toBe("-p"); expect(w.args.slice(2)).toEqual(["bash", "-lc", "x"]);
 });
 
@@ -149,3 +151,27 @@ real("the whole program: syok --confine says what is confined, and refuses to st
   } finally { ai.stop(true); }
 }, 60000);
 test("confinement is off unless switched on", () => { expect(getConfine()).toBeNull(); });
+real("keys held by other programs (this program, the shell that started it) cannot be found from inside", async () => {
+  if (process.platform !== "linux") return; // on Linux other programs' environments are listed under /proc
+  const marker = "SYOK_PROC_MARKER_" + process.pid; process.env[marker] = "visible-secret-" + process.pid;
+  const child = Bun.spawn(["sleep", "30"], { env: { ...process.env } }); // another program that holds the value from its start
+  delete process.env[marker]; // the probing commands themselves must not be handed the value
+  try {
+    const probe = `{ for p in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $p; done; } 2>/dev/null | grep -c "visible-secret-${process.pid}"; ls /proc | grep -c '^[0-9]'`;
+    const plain = await run(probe, null); expect(+plain.out.trim().split("\n")[0]).toBeGreaterThan(0);  // without confinement it IS found
+    const inside = await run(probe); const [found, procs] = inside.out.trim().split("\n").map(Number);
+    expect(found).toBe(0); expect(procs).toBeLessThan(10); // inside, only the command's own few programs exist
+  } finally { child.kill(); }
+});
+real("on Mac, a confined command cannot list other programs with their environment", async () => {
+  if (process.platform !== "darwin") return;
+  const value = "visible-secret-" + process.pid;
+  const child = Bun.spawn(["sleep", "30"], { env: { ...process.env, SYOK_PROC_MARKER: value } });
+  try {
+    const probe = `ps eww -ax 2>/dev/null | grep -c "${value}"; echo done`;
+    const plain = await run(probe, null); const inside = await run(probe);
+    console.log("  (Mac, programs showing the value: without confinement " + plain.out.trim().split("\n")[0] + ", inside " + inside.out.trim().split("\n")[0] + ")");
+    expect(inside.out).toContain("done"); expect(+inside.out.trim().split("\n")[0]).toBe(0);
+    const still = await run("echo ok > mac-still-works.txt && cat mac-still-works.txt && ls /usr/bin | head -1"); expect(still.out).toContain("ok"); expect(still.code).toBe(0);
+  } finally { child.kill(); }
+});

@@ -26,9 +26,9 @@ export class McpClient {
       this.buf += d; let i: number;
       while ((i = this.buf.indexOf("\n")) >= 0) { const line = this.buf.slice(0, i).trim(); this.buf = this.buf.slice(i + 1); if (!line) continue; try { const m = JSON.parse(line); const f = m.id != null && this.pending.get(m.id); if (f) { this.pending.delete(m.id); f(m); } } catch {} }
     });
-    this.proc.stderr!.on("data", () => {});
+    let said = ""; this.proc.stderr!.on("data", (d) => { said = (said + d).slice(-600); }); // kept to explain a server that stops
     this.proc.on("error", (e) => { this.dead = "MCP server failed: " + e.message; for (const f of this.pending.values()) f({ error: { message: this.dead } }); });
-    this.proc.on("close", () => { this.dead = this.dead || "MCP server stopped"; for (const f of this.pending.values()) f({ error: { message: this.dead } }); this.pending.clear(); });
+    this.proc.on("close", (code) => { const last = said.trim().split("\n").filter(Boolean).slice(-3).join(" | ").slice(0, 400); this.dead = this.dead || `its program stopped${code ? " with code " + code : ""}${last ? ". It said: " + last : ""}`; for (const f of this.pending.values()) f({ error: { message: this.dead } }); this.pending.clear(); });
     await this.req("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "syok-code", version: "0.1.0" } }, 20000);
     this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
     const r = await this.req("tools/list", {}, 20000);

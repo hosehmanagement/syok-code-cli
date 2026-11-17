@@ -17,17 +17,17 @@ function defPatterns(lang: Lang): Array<[string, RegExp]> {
   const N = `(?<n>${ID})`;
   switch (lang) {
     case "js": return [
-      ["function", new RegExp(`^\\s*(?:export\\s+)?(?:default\\s+)?(?:declare\\s+)?(?:async\\s+)?function\\s*\\*?\\s*${N}\\s*[(<]`)],
+      ["function", new RegExp(`^\\s*(?:export\\s+)?(?:\\/\\*.*?\\*\\/\\s*)?(?:default\\s+)?(?:declare\\s+)?(?:async\\s+)?function\\s*\\*?\\s*${N}\\s*[(<]`)],
       ["class", new RegExp(`^\\s*(?:export\\s+)?(?:default\\s+)?(?:declare\\s+)?(?:abstract\\s+)?class\\s+${N}\\b`)],
       ["interface", new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?interface\\s+${N}\\b`)],
-      ["type", new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?type\\s+${N}\\s*(?:<[^=]*>)?\\s*=`)],
+      ["type", new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?type\\s+${N}\\s*(?:=|<)`)],
       ["enum", new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:const\\s+)?enum\\s+${N}\\b`)],
       ["function", new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${N}\\s*(?::[^=]+)?=\\s*(?:async\\s+)?(?:function\\b|\\([^)]*\\)\\s*(?::[^=]+)?=>|${ID}\\s*=>)`)],
-      ["variable", new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:const|let|var)\\s+${N}\\b`)],
-      ["method", new RegExp(`^\\s+(?:(?:public|private|protected|static|readonly|override|async|get|set)\\s+)*\\*?${N}\\s*(?:<[^>]*>)?\\([^)]*\\)\\s*(?::\\s*[^{;]+)?\\{`)],
+      ["variable", new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:const|let|var)\\s+${N}(?![A-Za-z0-9_$])(?!\\s+extends\\b)`)],
+      ["method", new RegExp(`^\\s+(?:(?:public|private|protected|static|readonly|override|async|get|set)\\s+)*\\*?${N}\\s*(?:<[^>]*>)?\\((?![^)]*(?:['"\`]|\\bfunction\\b))[^)]*\\)\\s*(?::\\s*[^{;]+)?\\{`)],
       ["property", new RegExp(`^\\s+${N}\\s*:\\s*(?:async\\s+)?(?:function\\b|\\([^)]*\\)\\s*=>)`)],
     ];
-    case "py": return [["function", new RegExp(`^\\s*(?:async\\s+)?def\\s+${N}\\s*\\(`)], ["class", new RegExp(`^\\s*class\\s+${N}\\b`)], ["variable", new RegExp(`^${N}\\s*(?::[^=]+)?=(?!=)`)]];
+    case "py": return [["function", new RegExp(`^\\s*(?:async\\s+)?def\\s+${N}\\s*[(\\[]`)], ["class", new RegExp(`^\\s*class\\s+${N}\\b`)], ["variable", new RegExp(`^${N}\\s*(?::[^=]+)?=(?!=)`)], ["variable", new RegExp(`^(?!(?:else|try|finally|except|lambda|case|match|default|if|elif|while|for|with|class|def|async)\\b)${N}\\s*:\\s*[A-Za-z_"'\\[(]`)]];
     case "go": return [["function", new RegExp(`^func\\s+${N}\\s*[(\\[]`)], ["method", new RegExp(`^func\\s+\\([^)]*\\)\\s+${N}\\s*[(\\[]`)], ["type", new RegExp(`^\\s*type\\s+${N}\\b`)], ["variable", new RegExp(`^\\s*(?:var|const)\\s+${N}\\b`)]];
     case "rs": return [["function", new RegExp(`^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:const\\s+)?(?:async\\s+)?(?:unsafe\\s+)?(?:extern\\s+"[^"]*"\\s+)?fn\\s+${N}\\b`)], ["type", new RegExp(`^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:struct|enum|trait|type|union|mod)\\s+${N}\\b`)], ["variable", new RegExp(`^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:const|static)\\s+(?:mut\\s+)?${N}\\b`)], ["macro", new RegExp(`^\\s*macro_rules!\\s+${N}\\b`)]];
     case "java": return [["class", new RegExp(`^\\s*(?:(?:public|private|protected|internal|static|final|abstract|sealed|open|data|partial)\\s+)*(?:class|interface|enum|record|struct|object|trait|protocol|extension)\\s+${N}\\b`)], ["function", new RegExp(`^\\s*(?:(?:public|private|protected|internal|static|final|override|open|suspend|mutating)\\s+)*(?:fun|func|def)\\s+(?:<[^>]*>\\s*)?${N}\\s*[(<]`)], ["method", new RegExp(`^\\s+(?:(?:public|private|protected|internal|static|final|abstract|synchronized|override|virtual|async)\\s+)+[\\w<>\\[\\],.? ]+\\s+${N}\\s*\\([^;]*$`)]];
@@ -43,12 +43,52 @@ const NOT_NAMES = new Set(["if", "for", "while", "switch", "catch", "return", "f
 const isComment = (line: string, lang: Lang) => { const t = line.trimStart(); return t.startsWith("//") || t.startsWith("*") || t.startsWith("/*") || ((lang === "py" || lang === "rb" || lang === "other") && t.startsWith("#")) || (lang === "c" && false); };
 
 export interface Def { name: string; kind: string; line: number; text: string }
-/** Everything a file defines, in order. */
-export function outline(text: string, file: string): Def[] {
+// A member of a class: optional decorators and modifiers, then the name (a "#" marks a private one), then "(" or "<".
+const MEMBER = new RegExp(`^\\s*(?:@[\\w.]+(?:\\([^)]*\\))?\\s+)*(?:(?:public|private|protected|static|readonly|override|async|abstract|declare|accessor|get|set)\\s+)*\\*?\\s*#?(?<n>${ID})\\s*[(<]`);
+const CLASS_START = /^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\b|=\s*class\b[^;]*\{\s*$/;
+const indentOf = (line: string) => line.length - line.trimStart().length;
+/** Everything a file defines, in order. Plain variables inside functions are left out unless locals is set: they are noise in a
+ *  list of what a file contains. */
+export function outline(text: string, file: string, o: { locals?: boolean } = {}): Def[] {
   const lang = langOf(file), out: Def[] = [];
-  text.split("\n").forEach((line, i) => {
-    if (line.length > 400 || isComment(line, lang)) return;
-    for (const [kind, re] of pats(lang)) { const m = re.exec(line); const n = m?.groups?.n; if (n && !(kind === "method" && NOT_NAMES.has(n)) && !(kind === "function" && lang === "c" && NOT_NAMES.has(n))) { if (n === "constructor") break; out.push({ name: n, kind, line: i + 1, text: line.trim().slice(0, 160) }); break; } }
+  const classes: { indent: number; member: number; open: boolean }[] = []; // JS and TS: the class bodies we are inside, by indentation
+  let inBlock = false, pyQuote = "";
+  const lines = text.replace(/^\uFEFF/, "").split("\n");
+  // Some files are indented as a whole (generated code): "top level" is the smallest indentation that code lines have.
+  let baseIndent = Infinity; for (const l of lines) { if (l.trim() && l.length <= 400 && !/^\s*(?:\/\/|\/\*|\*|#)/.test(l)) { baseIndent = Math.min(baseIndent, indentOf(l)); if (!baseIndent) break; } }
+  lines.forEach((line, i) => {
+    const t = line.trim();
+    // Text that is not code: Python's triple-quoted blocks (docstrings often hold example code) and /* ... */ comments.
+    if (lang === "py") {
+      if (pyQuote) { if ((line.split(pyQuote).length - 1) % 2 === 1) pyQuote = ""; return; }
+      // A block of text starts where a line begins with three quotes, or ends with an opening three quotes after "=", "(", "," or "return".
+      const start = /^\s*[rRbBuUfF]{0,2}("""|''')/.exec(line);
+      if (start) { if ((line.split(start[1]).length - 1) % 2 === 1) pyQuote = start[1]; return; }
+      const open = /(?:=|\(|,|\breturn)\s*[rRbBuUfF]{0,2}("""|''')(?:(?!\1).)*$/.exec(line);
+      if (open && (line.split(open[1]).length - 1) % 2 === 1) pyQuote = open[1]; // the name on this line still counts
+    }
+    // Only a comment that STARTS the line counts: "/*" also appears inside ordinary text such as a path pattern '/api/*'.
+    else if (lang !== "rb" && lang !== "other") { if (inBlock) { if (line.includes("*/")) inBlock = false; return; } if (t.startsWith("/*")) { if (t.indexOf("*/", 2) < 0) inBlock = true; return; } }
+    if (!t || line.length > 400 || isComment(line, lang)) return;
+    const ind = indentOf(line);
+    if (lang === "js") {
+      // A class ends at a "}" back at its own indentation. Its heading may run over several lines ("class A<\n  T\n> {").
+      while (classes.length && ((ind <= classes[classes.length - 1].indent && t.startsWith("}")) || ind < classes[classes.length - 1].indent)) classes.pop();
+      const c = classes[classes.length - 1];
+      if (c && !c.open) { if (/\{\s*(?:\/\/.*)?$/.test(line)) c.open = true; return; }
+      if (c) {
+        if (c.member < 0) c.member = ind;
+        if (ind === c.member) { const m = MEMBER.exec(line); const n = m?.groups?.n; if (n && !NOT_NAMES.has(n) && n !== "constructor" && !/^\s*(?:return|throw|await|yield|new|typeof|delete|void)\b/.test(line)) { out.push({ name: n, kind: "method", line: i + 1, text: t.slice(0, 160) }); return; } }
+      }
+      if (CLASS_START.test(line) && !/\{[^{}]*\}\s*;?\s*(?:\/\/.*)?$/.test(line)) classes.push({ indent: ind, member: -1, open: /\{\s*(?:\/\/.*)?$/.test(line) });
+    }
+    for (const [kind, re] of pats(lang)) {
+      const m = re.exec(line); const n = m?.groups?.n; if (!n) continue;
+      if ((kind === "method" || (kind === "function" && lang === "c")) && NOT_NAMES.has(n)) continue;
+      if (n === "constructor") break;
+      if (kind === "variable" && lang === "js" && ind > baseIndent && !o.locals) break;
+      out.push({ name: n, kind, line: i + 1, text: t.slice(0, 160) }); break;
+    }
   });
   return out;
 }
@@ -61,11 +101,11 @@ export function findSymbol(name: string, files: string[], read: (file: string) =
     if (!isCode(file)) continue;
     const text = read(file); if (text === null || !text.includes(name)) continue;
     const lang = langOf(file);
+    const defAt = new Map<number, string>(); for (const d of outline(text, file, { locals: true })) if (d.name === name) defAt.set(d.line, d.kind);
     text.split("\n").forEach((line, i) => {
       if (line.length > 400 || !word.test(line)) return;
-      if (isComment(line, lang)) return;
-      let kind = "";
-      for (const [k, re] of pats(lang)) { const m = re.exec(line); if (m?.groups?.n === name) { kind = k; break; } }
+      const kind = defAt.get(i + 1);
+      if (!kind && isComment(line, lang)) return;
       const hit = { file, line: i + 1, text: line.trim().slice(0, 160) };
       if (kind) defs.push({ ...hit, kind }); else { uses.push(hit); useFiles.add(file); }
     });

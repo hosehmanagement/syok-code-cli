@@ -75,6 +75,7 @@ export async function doctor(o: DoctorOpts): Promise<{ ok: boolean; lines: Line[
   if (has("git")) add("ok", "git", "found"); else add("warn", "git", "not found", "Install git: checkpoints of your work, /diff and \"syok pr\" need it.");
   if (has("gh")) add("ok", "gh (GitHub program)", "found"); else add("warn", "gh (GitHub program)", "not found", "Only needed for \"syok pr\", \"syok review\" and /cloud. Install it from https://cli.github.com");
   if (platform === "linux") { if (has("bwrap")) add("ok", "bubblewrap", "found (needed for --confine)"); else add("warn", "bubblewrap", "not found", "Only needed for --confine. Install it with your package manager (the package is called bubblewrap)."); }
+  if (platform === "win32") add("ok", "--confine", "not available on Windows itself. To use it, run Syok Code inside WSL (Windows' own Linux): run \"wsl --install\" once, open Ubuntu, install Syok Code there with the Linux install line, and work on your project from there.");
   if (platform === "darwin") { if (has("sandbox-exec")) add("ok", "sandbox-exec", "found (needed for --confine)"); else add("warn", "sandbox-exec", "not found", "Only needed for --confine."); }
 
   const sf = join(o.root, ".syok", "settings.json");

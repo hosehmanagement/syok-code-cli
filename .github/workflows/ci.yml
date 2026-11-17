@@ -56,11 +56,37 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           id -u
-      - run: bun test test/confine.test.ts
+      - run: bun test test/confine.test.ts test/action-e2e.test.ts
       - name: syok doctor names the confinement tool as found
         run: |
           bun src/main.ts doctor | tee doctor.txt
           grep -Eq "OK    (bubblewrap|sandbox-exec). found" doctor.txt
+  # Windows has no confinement tool of its own, so Windows users are pointed to WSL (Windows' own Linux). This runs the real
+  # confinement tests inside WSL on a Windows machine, as an ordinary user, to prove that advice works.
+  confine-wsl:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Vampire/setup-wsl@v5
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+          additional-packages: bubblewrap curl unzip git ca-certificates
+      - name: Install Bun inside WSL and make an ordinary user
+        shell: wsl-bash {0}
+        run: |
+          set -e
+          curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash -s "bun-v1.4.4"
+          bun --version
+          id tester 2>/dev/null || useradd -m -s /bin/bash tester
+          uname -a
+      - name: The confinement tests, inside WSL, as an ordinary user
+        shell: wsl-bash {0}
+        run: |
+          set -e
+          rm -rf /home/tester/repo && mkdir -p /home/tester/repo && cp -r src test package.json bun.lock /home/tester/repo/ && chown -R tester:tester /home/tester/repo
+          su tester -c 'cd /home/tester/repo && id -u && bun install --frozen-lockfile && SYOK_REQUIRE_CONFINE=1 bun test test/confine.test.ts'
   # The one-line installers are run for real on Linux, Mac and Windows against a freshly built program.
   installer:
     strategy:

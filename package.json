@@ -1,6 +1,6 @@
 {
   "name": "syok-code-cli",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Syok Code for your own computer: an AI coding agent that edits files and runs commands, using your Syok AI key.",
   "type": "module",
   "bin": {
@@ -14,5 +14,8 @@
   "license": "MIT",
   "dependencies": {
     "modal": "0.11.1"
+  },
+  "devDependencies": {
+    "typescript": "5.9"
   }
 }

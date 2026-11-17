@@ -91,6 +91,7 @@ GitHub:
   syok cloud "what to do next"                              hand your work to GitHub's cloud: pushes it to a branch, opens a draft pull request and starts the @syok job there (asks first; in chat: /cloud <what to do>)
   syok pr "title"                                          commit your changes to a branch, push it and open a pull request (asks first)
 Confinement (Linux and Mac): --confine holds every command the AI runs inside the project folder, enforced by the operating system:
+  it also protects your keys: without it a command could still find them by looking at other running programs on this computer
   commands may read the computer but write only in the project and the temporary folder; folders with keys (.ssh, .aws...) cannot be read
   --confine-no-network   the same, and no network either.   "confine": true or "no-network" in .syok/settings.json makes it the default
   Linux needs the program bubblewrap; Mac uses the built-in sandbox-exec. Not available on Windows.
@@ -167,6 +168,15 @@ if (process.argv[2] === "action") {
   // Runs inside GitHub Actions (see: syok github-action). A missing key is answered with a comment, so it is handled in there.
   const { runAction } = await import("./action.ts"); const aroot = resolve(arg("--cwd", process.cwd()));
   const m = arg("--model", "syok-coder");
+  // In GitHub's cloud the keys of the job sit in the environment of this program and of the shell that started it. Removing
+  // them from the AI's commands is not enough: a command could read them from the list of running programs. So the commands
+  // are confined whenever this machine allows it (the workflow file installs what that needs).
+  if (!has("--no-confine")) {
+    const { planConfine, probeConfine, setConfine } = await import("./confine.ts");
+    const plan = planConfine({ root: aroot }); const problem = "problem" in plan ? plan.problem : probeConfine(plan);
+    if (problem) console.log("(Commands are NOT confined on this machine: " + problem.split("\n")[0].slice(0, 200) + " Keys are still removed from the commands' own environment.)");
+    else { setConfine(plan as any); console.log(process.platform === "linux" ? "(Commands run confined: they cannot write outside the project or see other programs and their keys.)" : "(Commands run confined: they cannot write outside the project or read folders that hold keys.)"); }
+  }
   const r = await runAction({
     run: realRun, log: (x) => console.log(x), env: { ...process.env, SYOK_BASE_URL: base, SYOK_API_KEY: key }, root: aroot,
     agent: async (task, o) => {

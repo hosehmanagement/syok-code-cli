@@ -92,3 +92,78 @@ test("it stays fast on a big project", async () => {
   const t0 = Date.now(); const out = await runTool(c, "find_symbol", { name: "helper", show: "definition" }); const ms = Date.now() - t0;
   expect(out).toContain("src/m777.ts:41  [function]"); expect(ms).toBeLessThan(5000);
 }, 60000);
+
+test("what the accuracy measurement on real projects taught: class members, text blocks, whole-file indentation, type parameters", () => {
+  const ts = [
+    "export class Router<",                                   // 1  heading over several lines
+    "  T extends object,",                                    // 2
+    "> {",                                                    // 3
+    "  #routes: Route[] = [];",                               // 4
+    "  #addRoute(method: string, path: string): void {",      // 5  private method
+    "    init(method, path);",                                // 6  a call, not a member
+    "  }",                                                    // 7
+    "  mount(",                                               // 8  parameters on the next lines
+    "    path: string,",                                      // 9
+    "  ): this {",                                            // 10
+    "    return this;",                                       // 11
+    "  }",                                                    // 12
+    "  static create<",                                       // 13
+    "    A,",                                                 // 14
+    "  >(a: A) {}",                                           // 15
+    "  get size(): Readonly<",                                // 16
+    "    number",                                             // 17
+    "  > { return 1; }",                                      // 18
+    "}",                                                      // 19
+    "class Empty extends Base {}",                            // 20 one line: no body lines follow
+    "export function after(a: number) {",                     // 21
+    "  const local = a + 1;",                                 // 22 a local: left out of the list
+    "  return local;",                                        // 23
+    "}",                                                      // 24
+    "export type Layout<T = Record<string, any>> = (props: T) => any",  // 25
+    "type Long<",                                             // 26
+    "  T,",                                                   // 27
+    "> = T[];",                                               // 28
+    "function generic<const Arg extends string>(a: Arg) {}",  // 29
+    "  const Arg extends string,",                            // 30 a type parameter, not a variable
+    "describe('routes', function () {",                       // 31 a call that passes a function
+    "  it('works', function (done) {",                        // 32
+    "app.get('/api/*', handler);",                            // 33 '/*' inside text does not start a comment
+    "const afterPath = 1;",                                   // 34
+    "/* a comment that",                                      // 35
+    "function hidden() {}",                                   // 36
+    "ends here */",                                           // 37
+    "const $ = make();",                                      // 38
+    "export /*@__PURE__*/ function pure() {}",                // 39
+  ].join("\n");
+  expect(names(ts, "router.ts")).toEqual(["class Router@1", "method addRoute@5", "method mount@8", "method create@13", "method size@16", "class Empty@20", "function after@21", "type Layout@25", "type Long@26", "function generic@29", "variable afterPath@34", "variable $@38", "function pure@39"]);
+  // find_symbol still treats a local variable as defined where it is declared
+  expect(findSymbol("local", ["router.ts"], () => ts).defs.map((d) => d.line)).toEqual([22]);
+  expect(findSymbol("addRoute", ["router.ts"], () => ts).defs.map((d) => `${d.line}:${d.kind}`)).toEqual(["5:method"]);
+  expect(findSymbol("init", ["router.ts"], () => ts).defs).toEqual([]);
+
+  const py = [
+    'class Tag:',                                             // 1
+    '    """Example:',                                        // 2
+    '',                                                       // 3
+    '    class Example(Tag):',                                // 4  inside the text block
+    '        def check(self): ...',                           // 5
+    '    """',                                                // 6
+    '    def real(self): ...',                                // 7
+    "if '\"\"\"' in text:",                                   // 8  three quotes inside ordinary text
+    '    pass',                                               // 9
+    'def after_quotes(): ...',                                // 10
+    'HELP = """',                                             // 11 a name given a block of text
+    'def not_code(): ...',                                    // 12
+    '"""',                                                    // 13
+    'grammar: Grammar',                                       // 14 a name with only a type
+    'def generic[T](x: T) -> T: ...',                         // 15
+    'else:',                                                  // 16
+    '"""One line."""',                                        // 17
+    'def last(): ...',                                        // 18
+  ].join("\n");
+  expect(names(py, "tag.py")).toEqual(["class Tag@1", "function real@7", "function after_quotes@10", "variable HELP@11", "variable grammar@14", "function generic@15", "function last@18"]);
+
+  // a file indented as a whole (generated code), and one that starts with a byte-order mark
+  expect(names("// generated\n  'use strict'\n  const Serializer = require('x')\n  function build() {\n    const inner = 1\n  }\n", "gen.js")).toEqual(["variable Serializer@3", "function build@4"]);
+  expect(names("﻿export const msg = 'ok'\n", "bom.mjs")).toEqual(["variable msg@1"]);
+});
