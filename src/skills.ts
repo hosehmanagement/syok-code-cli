@@ -22,7 +22,7 @@ const NEEDS_CMD_WORDS = /\b(run|execute|install|build|compile|deploy|lint|format
 
 export const safeName = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 
-/** Split the --- front matter off the top. Only simple "key: value" lines are read. */
+/** Split the --- front matter off the top. Simple "key: value" lines are read, and values continued on indented lines. */
 export function splitFront(text: string): { meta: Record<string, string>; body: string } {
   const t = text.replace(/^﻿/, "").replace(/\r\n/g, "\n");
   const m = /^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(t);
@@ -31,7 +31,8 @@ export function splitFront(text: string): { meta: Record<string, string>; body: 
   let key = "";
   for (const line of m[1].split("\n")) {
     const kv = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line);
-    if (kv) { key = kv[1].toLowerCase(); meta[key] = kv[2].trim().replace(/^["']|["']$/g, ""); }
+    // "key: >-" and "key: |" start a value written on the following indented lines; the marker itself is not part of the value.
+    if (kv) { key = kv[1].toLowerCase(); const v = kv[2].trim(); meta[key] = /^[>|][+-]?\d*$/.test(v) ? "" : v.replace(/^["']|["']$/g, ""); }
     else if (key && /^\s+(-\s+)?\S/.test(line)) meta[key] = (meta[key] + " " + line.replace(/^\s+(-\s+)?/, "")).trim();
   }
   return { meta, body: t.slice(m[0].length) };
@@ -150,10 +151,13 @@ export function buildSkillTask(sk: Skill, request: string): string {
   const need = sk.needsRun
     ? "This skill is about running commands. Run the commands it needs yourself with run_command, one at a time, read each result, and fix problems and continue. Do not only describe commands and do not ask the user to run them."
     : "Follow the skill's method.";
+  // Skill files written for a command-line tool are sometimes out of date with the tool that is really installed.
+  const tool = "The installed program is the truth, not this text. If a command from the skill fails with \"No such command\", \"no such option\" or a usage message, do not retry variations by guessing: run the tool's own --help, then the --help of the exact subcommand, and follow what they print. In a usage line like \"tool [OPTIONS] COMMAND [ARGS]\", the options listed for the tool itself (for example --project or --json) go BEFORE the command name, and each command is a fresh start: a tool that needs a file or project must be given it again on every command.";
   return [
     `Run the skill "${sk.name}" now.`,
     request ? `What the user wants: ${request}` : "The user gave no extra details: use the project folder and sensible defaults, and do not stop to ask.",
     need,
+    ...(sk.needsRun ? [tool] : []),
     "If a command is blocked or the user says no, say exactly which command and why in your final summary. Never claim you ran something you did not.",
     "",
     `=== Skill: ${sk.name} ===`,

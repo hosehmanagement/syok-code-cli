@@ -1,0 +1,82 @@
+name: cli-anything live test
+# Checks, with a real AI through your Syok key, that Syok Code can use a tool from CLI-Anything (github.com/HKUDS/CLI-Anything):
+# the LibreOffice tool is installed with their own installer, its instruction file is added as a Syok skill straight from their
+# repository, and the AI is asked to make a real PDF with it. No key is typed here: it uses the repository secrets
+# SYOK_BASE_URL and SYOK_API_KEY that the score workflow already uses.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model or preset"
+        default: "syok-auto"
+  pull_request:
+    paths:
+      - ".github/workflows/cli-anything-live.yml"
+      - "src/skills.ts"
+permissions:
+  contents: read
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: bun install --frozen-lockfile
+      - name: Install LibreOffice and the PDF reader used for checking
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libreoffice-writer libreoffice-calc poppler-utils > /dev/null && soffice --version
+      - name: Install the CLI-Anything tool with their own installer
+        run: |
+          pip install -q cli-anything-hub
+          cli-hub install libreoffice
+          cli-anything-libreoffice --help | head -5
+      - name: The tool works on its own (so a later failure is ours, not theirs)
+        run: |
+          mkdir control && cd control
+          cli-anything-libreoffice document new --type writer -o d.json
+          cli-anything-libreoffice --project d.json writer add-paragraph -t "control check"
+          cli-anything-libreoffice --project d.json document save
+          cli-anything-libreoffice --project d.json export render c.pdf -p pdf
+          pdftotext c.pdf - | grep -q "control check"
+      - name: Record every use of the tool (a small recorder in front of the real program)
+        run: |
+          real="$(command -v cli-anything-libreoffice)"
+          mkdir -p "$RUNNER_TEMP/rec"
+          printf '#!/bin/sh\necho "$*" >> "%s/calls.log"\nexec "%s" "$@"\n' "$RUNNER_TEMP" "$real" > "$RUNNER_TEMP/rec/cli-anything-libreoffice"
+          chmod +x "$RUNNER_TEMP/rec/cli-anything-libreoffice"
+          echo "$RUNNER_TEMP/rec" >> "$GITHUB_PATH"
+      - name: Add their instruction file as a Syok skill, straight from their repository
+        env:
+          SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+        run: |
+          mkdir work
+          bun src/main.ts skill add HKUDS/CLI-Anything/skills/cli-anything-libreoffice --cwd work
+          bun src/main.ts skills --cwd work | tee skills.txt
+          grep -q "cli-anything-libreoffice" skills.txt
+          if grep -q ">-" skills.txt; then echo "the description still shows the '>-' marker"; exit 1; fi
+      - name: Ask the AI to make a PDF with the tool
+        env:
+          SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+          MODEL: ${{ inputs.model || 'syok-auto' }}
+        run: |
+          bun src/main.ts skill cli-anything-libreoffice "Make a Writer document with the heading 'Syok CLI-Anything test' and one paragraph that says 'made by Syok Code 6x7=42'. Export it as report.pdf in this folder. Use only the cli-anything-libreoffice tool for this." --cwd work --mode auto --model "$MODEL" --json | tee run.json
+      - name: Check the result (strict)
+        run: |
+          echo "--- uses of the tool by the AI:"; cat "$RUNNER_TEMP/calls.log"
+          test -s work/report.pdf
+          head -c 5 work/report.pdf | grep -q "%PDF-"
+          pdftotext work/report.pdf out.txt; cat out.txt
+          grep -q "Syok CLI-Anything test" out.txt
+          grep -q "made by Syok Code 6x7=42" out.txt
+          grep -q "export render" "$RUNNER_TEMP/calls.log"
+          grep -Eq "writer add-(heading|paragraph)" "$RUNNER_TEMP/calls.log"
+          node -e "const j=JSON.parse(require('fs').readFileSync('run.json','utf8').trim().split('\n').pop()); if(!(j.commands>=3)) {console.error('the AI ran too few commands: '+j.commands); process.exit(1)} console.log('commands run:', j.commands, '| stopped:', j.stopped)"
+      - name: Summary
+        if: always()
+        run: |
+          { echo '```'; cat "$RUNNER_TEMP/calls.log" 2>/dev/null; echo; tail -1 run.json 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
