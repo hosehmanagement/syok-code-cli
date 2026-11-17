@@ -1,3 +1,4 @@
+// Each test makes real git repositories, which is slow on Windows runners, so each gets a minute (not the default 5 seconds).
 // /cloud: handing work to GitHub's cloud. Real git with a real (local) remote; only gh is a stand-in, because it talks to github.com.
 import { test, expect } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -43,28 +44,28 @@ test("uncommitted work: asked first, pushed to a new branch as one commit, draft
   const c = s.bodies["pr comment"]; expect(c.startsWith("@syok finish the tests and fix what fails\n")).toBe(true); expect(c).toContain("Continue the work on this pull request's branch."); expect(c).toContain("Notes from the session on my computer:\nChanged the value to 2. Tests not run yet.");
   expect(s.gh.find((a) => a[0] === "pr" && a[1] === "comment")![2]).toBe("https://github.com/me/app/pull/7");
   expect(r.message).toContain("git pull");
-});
+}, 60000);
 
 test("saying no pushes nothing and changes nothing", async () => {
   const s = setup(); writeFileSync(join(s.work, "a.js"), "module.exports = 2;\n");
   const r = await s.go("do it", false);
   expect(r.ok).toBe(false); expect(r.message).toContain("Nothing was pushed"); expect(s.remoteBranches()).toEqual(["main"]); expect(git(s.work, "branch", "--show-current")).toBe("main"); expect(git(s.work, "status", "--porcelain")).toContain("a.js");
   expect(s.gh.some((a) => a[0] === "pr" || a[0] === "issue")).toBe(false);
-});
+}, 60000);
 
 test("a key in the changes stops everything before the push, and the work is left as it was", async () => {
   const s = setup(); writeFileSync(join(s.work, "config.js"), 'const k = "ghp_' + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4" + '";\n');
   const r = await s.go("deploy it");
   expect(r.ok).toBe(false); expect(r.message).toContain("looks like a key or token"); expect(s.remoteBranches()).toEqual(["main"]);
   expect(git(s.work, "branch", "--show-current")).toBe("main"); expect(git(s.work, "branch", "--format=%(refname:short)")).toBe("main"); expect(git(s.work, "status", "--porcelain")).toContain("?? config.js");
-});
+}, 60000);
 
 test("nothing local to send: an issue is opened instead, and nothing is pushed", async () => {
   const s = setup(); const r = await s.go("add a README\nwith install steps");
   expect(r.ok).toBe(true); expect(r.kind).toBe("issue"); expect(r.url).toBe("https://github.com/me/app/issues/8"); expect(s.remoteBranches()).toEqual(["main"]);
   const issue = s.gh.find((a) => a[0] === "issue")!; expect(issue[issue.indexOf("--title") + 1]).toBe("add a README"); expect(s.bodies["issue create"].startsWith("@syok add a README\nwith install steps\n")).toBe(true);
   expect(s.asked[0].what).toContain("open an issue in me/app");
-});
+}, 60000);
 
 test("commits GitHub does not have yet are sent too; on your own branch that branch is used; an open pull request is reused", async () => {
   const s = setup({ gh: (a) => a[0] === "pr" && a[1] === "view" ? { code: 0, out: "OPEN https://github.com/me/app/pull/3\n" } : undefined });
@@ -72,13 +73,13 @@ test("commits GitHub does not have yet are sent too; on your own branch that bra
   const r = await s.go("review and finish");
   expect(r.ok).toBe(true); expect(r.branch).toBe("feature/x"); expect(s.asked[0].what).toContain("1 commit GitHub does not have yet"); expect(s.remoteBranches()).toEqual(["feature/x", "main"]);
   expect(s.gh.some((a) => a[0] === "pr" && a[1] === "create")).toBe(false); expect(s.gh.find((a) => a[0] === "pr" && a[1] === "comment")![2]).toBe("https://github.com/me/app/pull/3");
-});
+}, 60000);
 
 test("only never-sent files changed: nothing is pushed and the temporary branch is removed", async () => {
   const s = setup(); writeFileSync(join(s.work, ".env"), "SECRET=1\n");
   const r = await s.go("do it");
   expect(r.ok).toBe(false); expect(r.message).toContain("never sent"); expect(s.remoteBranches()).toEqual(["main"]); expect(git(s.work, "branch", "--format=%(refname:short)")).toBe("main");
-});
+}, 60000);
 
 test("each missing piece is named with what to do: no task, no git, no gh, not on GitHub, the job not set up", async () => {
   const s = setup(); expect((await s.go("  ")).message).toContain("Say what the cloud should do");
@@ -88,11 +89,11 @@ test("each missing piece is named with what to do: no task, no git, no gh, not o
   const noRepo = setup({ gh: (a) => a[0] === "repo" ? { code: 1, out: "no git remotes found" } : undefined }); expect((await noRepo.go("x")).message).toContain("Could not read this project on GitHub");
   const noJob = setup({ workflow: false }); writeFileSync(join(noJob.work, "a.js"), "2\n"); const r = await noJob.go("x");
   expect(r.message).toContain('The "@syok" job is not set up in me/app yet'); expect(r.message).toContain("syok github-action"); expect(noJob.asked.length).toBe(0); expect(noJob.remoteBranches()).toEqual(["main"]);
-});
+}, 60000);
 
 test("a failed pull request or comment is reported with what did happen, never as success", async () => {
   const a = setup({ gh: (x) => x[0] === "pr" && x[1] === "create" ? { code: 1, out: "GraphQL: not allowed" } : undefined }); writeFileSync(join(a.work, "a.js"), "2\n");
   const ra = await a.go("x"); expect(ra.ok).toBe(false); expect(ra.message).toContain("was pushed, but the pull request could not be opened"); expect(a.remoteBranches().length).toBe(2);
   const b = setup({ gh: (x) => x[0] === "pr" && x[1] === "comment" ? { code: 1, out: "boom" } : undefined }); writeFileSync(join(b.work, "a.js"), "2\n");
   const rb = await b.go("fix it"); expect(rb.ok).toBe(false); expect(rb.message).toContain("could not be posted"); expect(rb.message).toContain('"@syok fix it"');
-});
+}, 60000);
