@@ -6,7 +6,8 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { posix } from "node:path";
+const { join, resolve } = posix; // confinement exists on Linux and Mac only, so its paths are always of that kind
 
 export interface Confine { kind: "bwrap" | "sandbox-exec"; root: string; network: boolean; home: string; write: string[]; hide: string[]; lock: string[] }
 export interface ConfineOpts { root: string; network?: boolean; platform?: string; home?: string; exists?: (p: string) => boolean; isDir?: (p: string) => boolean; real?: (p: string) => string; tmp?: string }

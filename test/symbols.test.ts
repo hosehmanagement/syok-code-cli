@@ -84,7 +84,7 @@ test("the two tools in the agent: real files, limits, helpful errors, and read-o
   expect(describeOutline("x.js", [], 3)).toContain("x.js (3 lines)");
   expect(READONLY.has("find_symbol") && READONLY.has("outline")).toBe(true);
   c.allowed = READONLY; c.depth = 1; const names = toolDefs(c).map((t: any) => t.function.name); expect(names).toContain("find_symbol"); expect(names).toContain("outline"); expect(names).not.toContain("edit_file");
-});
+}, 60000); // making the test files is slow on Windows; the speed of the lookup itself is checked in the next test
 
 test("it stays fast on a big project", async () => {
   const files: Record<string, string> = {}; for (let i = 0; i < 1500; i++) files[`src/m${i}.ts`] = `export function f${i}(a: number) { return helper(a) + ${i}; }\n`.repeat(40) + (i === 777 ? "export function helper(a: number) { return a; }\n" : "");
