@@ -88,6 +88,7 @@ Your own commands and plugins:
   syok plugin add <owner/repo|folder> | list | remove <name>      bundles of skills, commands and hooks
 GitHub:
   syok review <pull request number or link> [--comment]   read-only review of a pull request (needs the gh program)
+  syok cloud "what to do next"                              hand your work to GitHub's cloud: pushes it to a branch, opens a draft pull request and starts the @syok job there (asks first; in chat: /cloud <what to do>)
   syok pr "title"                                          commit your changes to a branch, push it and open a pull request (asks first)
 Confinement (Linux and Mac): --confine holds every command the AI runs inside the project folder, enforced by the operating system:
   commands may read the computer but write only in the project and the temporary folder; folders with keys (.ssh, .aws...) cannot be read
@@ -219,6 +220,7 @@ if (has("--no-web")) settings.web = false;
 if (has("--no-checks")) settings.checks = false;
 // What this whole session used (every task, skill and helper added up); shown by /usage and after each task.
 const sessionUsage = emptyUsage();
+let lastSummary = ""; // what the last task ended with: sent along by /cloud as notes
 function report(r: Result, extra = ""): string {
   mergeUsage(sessionUsage, r.usage);
   const chk = r.check ? (r.check.passed === true ? `; project check passed (${r.check.command})` : r.check.passed === false ? `; PROJECT CHECK STILL FAILING (${r.check.command})` : `; project check not run (${r.check.command})`) : "";
@@ -247,7 +249,7 @@ async function turn(text: string) {
   takeCheckpoint(ctx, cps, text, history?.length || 0);
   try {
     const r = await runAgent({ root, task: im.text, images: im.images, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken });
-    history = r.messages; persist();
+    history = r.messages; lastSummary = r.summary || lastSummary; persist();
     console.log("\n" + r.summary + "\n" + report(r));
   } catch (e: any) { console.log("Error: " + e.message); }
 }
@@ -298,6 +300,12 @@ if (process.argv[2] === "review") {
   if (has("--comment") && r.summary && (mode === "auto" || await ask("post this review as a comment on the pull request", r.summary))) { const c = realRun("gh", ["pr", "comment", ref, "--body", r.summary], root); console.log(c.code ? "Could not post the comment: " + c.out.slice(0, 200) : "Comment posted."); }
   rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1);
 }
+if (process.argv[2] === "cloud") {
+  const { sendToCloud } = await import("./cloud.ts");
+  const task = process.argv.slice(3).filter((x, i, all) => !x.startsWith("--") && !VALUE_FLAGS.has(all[i - 1] ?? "")).join(" ").trim();
+  const r = await sendToCloud({ task, run: realRun, cwd: root, approve: mode === "auto" ? async () => true : ask });
+  (r.ok ? console.log : console.error)(r.message); rl?.close(); process.exit(r.ok ? 0 : 1);
+}
 if (process.argv[2] === "pr") {
   const title = process.argv.slice(3).filter((x) => !x.startsWith("--")).join(" ").trim() || "Changes from Syok Code";
   const r = await openPr(title, realRun, root, mode === "auto" ? async () => true : ask);
@@ -335,7 +343,7 @@ if (prompt) {
   if (readOnlyRun) ctx.allowed = READONLY;
   const im = extractImages(root, prompt); im.notes.forEach((n) => console.error("(" + n + ")"));
   const r = await runAgent({ root, task: im.text, images: im.images, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken });
-  history = r.messages; persist();
+  history = r.messages; lastSummary = r.summary || lastSummary; persist();
   if (JSON_OUT) console.log(JSON.stringify({ summary: r.summary, session: sessionId, steps: r.steps, tokens: r.tokens, touched: r.touched, stopped: r.stopped, ranTests: r.ranTests, commands: r.commands, declined: r.declined, usage: r.usage, check: r.check ?? null }));
   else console.log("\n" + r.summary + "\n" + report(r));
   if (!stay) { rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1); }
@@ -354,9 +362,14 @@ for (;;) {
     const b = modeTask(slash[1] as Kind, words(slash[2]));
     if (b.error) { console.log(b.error); continue; }
     ctx.allowed = b.readOnly ? READONLY : undefined;
-    try { const r = await runAgent({ root, task: b.task, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken }); history = r.messages; persist(); console.log("\n" + r.summary + `\n(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"})`); }
+    try { const r = await runAgent({ root, task: b.task, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken }); history = r.messages; lastSummary = r.summary || lastSummary; persist(); console.log("\n" + r.summary + `\n(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"})`); }
     catch (e: any) { console.log("Error: " + e.message); } finally { ctx.allowed = undefined; }
     continue;
+  }
+  if (line === "/cloud" || line.startsWith("/cloud ")) {
+    const { sendToCloud } = await import("./cloud.ts");
+    const r = await sendToCloud({ task: line.slice(6).trim(), notes: lastSummary, run: realRun, cwd: root, approve: ask });
+    console.log(r.message); continue;
   }
   if (line === "/agents") { const { describeAgents } = await import("./agents.ts"); console.log(describeAgents(ctx.agents || [])); continue; }
   if (line === "/diff") { const d = sessionDiff(ctx); console.log(d ? colorize(d) : "No changes yet."); continue; }
@@ -417,7 +430,7 @@ for (;;) {
   const found = skName ? loadSkills(root).get(skName.toLowerCase()) : undefined;
   if (sm && !found) { console.log(`No skill named "${skName}". Your skills:\n` + listSkills()); continue; }
   if (found) {
-    try { const r = await runSkill(found, skRest, history); history = r.messages; persist(); console.log("\n" + r.summary + "\n" + skillReport(found, r)); } catch (e: any) { console.log("Error: " + e.message); }
+    try { const r = await runSkill(found, skRest, history); history = r.messages; lastSummary = r.summary || lastSummary; persist(); console.log("\n" + r.summary + "\n" + skillReport(found, r)); } catch (e: any) { console.log("Error: " + e.message); }
     continue;
   }
   await turn(line);
