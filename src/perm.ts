@@ -37,7 +37,7 @@ export interface Settings { allow?: string[]; deny?: string[];
   /** Optional prices in US dollars per million tokens, by a piece of the model or provider name, to show an estimated cost: { "gpt-5": { "in": 1.25, "out": 10 } } */
   prices?: Record<string, { in?: number; out?: number }>;
   /** General terminal mode: not only programming. */
-  general?: boolean; hooks?: Record<string, Array<{ match?: string; command: string; timeout_sec?: number }>>; mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> }
+  general?: boolean; hooks?: Record<string, Array<{ match?: string; command: string; timeout_sec?: number }>>; mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> }> }
 export type Asker = (what: string, detail: string) => Promise<boolean>;
 export function isProtected(rel: string): boolean { return PROTECTED.some((r) => r.test(rel.replace(/\\/g, "/"))); }
 export function checkCommand(cmd: string, s: Settings = {}): "deny" | "safe" | "other" {

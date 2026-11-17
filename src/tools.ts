@@ -18,7 +18,7 @@ export function commandTimeout(s: Settings, asked?: number): number {
   const def = Math.min(cap, Math.max(5, s.timeout_sec || 120));
   return Math.min(cap, Math.max(5, asked || def));
 }
-import type { McpClient } from "./mcp.ts";
+import type { ToolServer as McpClient } from "./mcp.ts";
 
 const SKIP = new Set([".git", "node_modules", ".venv", "__pycache__", "dist", "build", ".next", "target"]);
 const fn = (name: string, description: string, properties: any, required: string[]) => ({ type: "function", function: { name, description, parameters: { type: "object", properties, required } } });

@@ -113,6 +113,7 @@ Extras (in <project>/.syok/settings.json):
   "hooks": { "PreToolUse": [{"match":"edit_file|write_file","command":"./check.sh"}], "PostToolUse": [...], "Stop": [{"command":"npm test"}] }
       your command gets the event as JSON on its input; exit code 2 blocks the action (or sends the message back to the AI for Stop)
   "mcpServers": { "name": { "command": "node", "args": ["server.js"] } }   local tool servers (MCP over stdio)
+  "mcpServers": { "name": { "url": "https://tools.example.com/mcp", "headers": { "Authorization": "Bearer ${MY_KEY}" } } }   hosted tool servers (MCP over HTTP); ${MY_KEY} is read from your environment
   "allow": ["npm run"], "deny": ["curl"]    command prefixes to always allow / block
 The AI can also delegate to helper agents (read-only explorers run in parallel) and run background jobs (dev servers).`;
 if (has("--help") || has("-h")) { console.log(HELP); process.exit(0); }
