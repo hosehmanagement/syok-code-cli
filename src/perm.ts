@@ -26,6 +26,8 @@ export const SAFE = [
   /^(pytest|python3? -m (pytest|unittest)|go (test|vet)|cargo (test|build|check)|node --test|make (test|check|build))\b/,
 ];
 export interface Settings { allow?: string[]; deny?: string[];
+  /** Hold the AI's commands inside the project folder (Linux, Mac): true, or "no-network" to cut the network too. */
+  confine?: boolean | "no-network";
   /** Custom helpers (.syok/agents and the files of other tools): false switches them off. */
   agents?: boolean;
   /** run_command: default seconds (120) and the most the AI may ask for (600). Hard ceiling 24 hours. */

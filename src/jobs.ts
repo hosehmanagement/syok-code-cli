@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, openSync, closeSync, statSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { spawnCommand, cleanEnv } from "./shell.ts";
+import { getConfine, setConfine } from "./confine.ts";
 
 export interface JobMeta { id: number; cmd: string; cwd: string; started: number; runner: number; maxSec: number }
 export interface JobInfo extends JobMeta { state: "running" | "finished" | "lost"; code: number | null }
@@ -39,7 +40,9 @@ export function startJob(root: string, cmd: string, maxSec = 0): number {
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
   writeFileSync(join(dir, "out.log"), "");
   // The runner is this same program started again. SYOK_ENTRY names the program file when it is not the one that is running (tests, embedding).
-  const runner = spawn(process.execPath, [...selfArgs(process.argv[1] || "", process.env.SYOK_ENTRY), "__jobrun", dir], { detached: process.platform !== "win32", stdio: "ignore", windowsHide: true });
+  // A saved job keeps the confinement it was started under: the runner is told through its environment.
+  const conf = getConfine();
+  const runner = spawn(process.execPath, [...selfArgs(process.argv[1] || "", process.env.SYOK_ENTRY), "__jobrun", dir], { detached: process.platform !== "win32", stdio: "ignore", windowsHide: true, env: { ...process.env, SYOK_CONFINE_PLAN: conf ? JSON.stringify(conf) : "" } });
   runner.unref();
   meta.runner = runner.pid || 0;
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
@@ -49,7 +52,8 @@ export function startJob(root: string, cmd: string, maxSec = 0): number {
 /** The runner process: run the command, log its output, write the exit code. */
 export async function runJobRunner(dir: string): Promise<number> {
   const meta: JobMeta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"));
-  const env = cleanEnv();
+  if (process.env.SYOK_CONFINE_PLAN) { try { setConfine(JSON.parse(process.env.SYOK_CONFINE_PLAN)); } catch { writeFileSync(join(dir, "out.log"), "Could not start: the confinement of this job could not be read, so it was not run.\n", { flag: "a" }); writeFileSync(join(dir, "code"), "126"); return 126; } }
+  const env = cleanEnv(); delete env.SYOK_CONFINE_PLAN;
   const fd = openSync(join(dir, "out.log"), "a");
   return await new Promise<number>((done) => {
     let finished = false;

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentSystem } from "./agents.ts";
+import { getConfine, confineHint } from "./confine.ts";
 import { toolDefs, makeCtx, runTool, undoAll, READONLY, runCheckCommand, commandTimeout, type Ctx } from "./tools.ts";
 import { projectCheck, worthChecking } from "./checks.ts";
 import { allowCommand } from "./perm.ts";
@@ -217,7 +218,7 @@ export async function runAgent(o: Opts): Promise<Result> {
 }
 async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s: string) => void): Promise<Result> {
   const hooks = ctx.settings.hooks || {};
-  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || (ctx.settings.general ? SYSTEM_GENERAL : SYSTEM)) + loadInstructions(ctx.root) + (ctx.depth === 0 ? langContext(ctx.root) + shellHint() : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
+  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || (ctx.settings.general ? SYSTEM_GENERAL : SYSTEM)) + loadInstructions(ctx.root) + (ctx.depth === 0 ? langContext(ctx.root) + shellHint() : "") + (getConfine() ? confineHint(getConfine()!) : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
   const planned = ctx.mode === "plan" && ctx.depth === 0 ? PLAN_NOTE : "";
   messages.push({ role: "user", content: withImages(planned + (o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.`), o.images || []) });
   const f = o.fetchImpl || fetch;

@@ -89,6 +89,10 @@ Your own commands and plugins:
 GitHub:
   syok review <pull request number or link> [--comment]   read-only review of a pull request (needs the gh program)
   syok pr "title"                                          commit your changes to a branch, push it and open a pull request (asks first)
+Confinement (Linux and Mac): --confine holds every command the AI runs inside the project folder, enforced by the operating system:
+  commands may read the computer but write only in the project and the temporary folder; folders with keys (.ssh, .aws...) cannot be read
+  --confine-no-network   the same, and no network either.   "confine": true or "no-network" in .syok/settings.json makes it the default
+  Linux needs the program bubblewrap; Mac uses the built-in sandbox-exec. Not available on Windows.
 Isolation: dangerous commands are always blocked. For real isolation use the Daytona sandbox:  syok sandbox start owner/repo | status | stop   then add --sandbox
   With --sandbox, commands run in the sandbox's copy of your GitHub repository and every file the AI edits is copied there too.
   The sandbox starts from what is on GitHub, so push your own uncommitted changes first if the commands need them.
@@ -113,7 +117,7 @@ Extras (in <project>/.syok/settings.json):
   "hooks": { "PreToolUse": [{"match":"edit_file|write_file","command":"./check.sh"}], "PostToolUse": [...], "Stop": [{"command":"npm test"}] }
       your command gets the event as JSON on its input; exit code 2 blocks the action (or sends the message back to the AI for Stop)
   "mcpServers": { "name": { "command": "node", "args": ["server.js"] } }   local tool servers (MCP over stdio)
-  "mcpServers": { "name": { "url": "https://tools.example.com/mcp", "headers": { "Authorization": "Bearer ${MY_KEY}" } } }   hosted tool servers (MCP over HTTP); ${MY_KEY} is read from your environment
+  "mcpServers": { "name": { "url": "https://tools.example.com/mcp", "headers": { "Authorization": "Bearer \${MY_KEY}" } } }   hosted tool servers (MCP over HTTP); \${MY_KEY} is read from your environment
   "allow": ["npm run"], "deny": ["curl"]    command prefixes to always allow / block
 The AI can also delegate to helper agents (read-only explorers run in parallel) and run background jobs (dev servers).`;
 if (has("--help") || has("-h")) { console.log(HELP); process.exit(0); }
@@ -219,6 +223,14 @@ function report(r: Result, extra = ""): string {
   mergeUsage(sessionUsage, r.usage);
   const chk = r.check ? (r.check.passed === true ? `; project check passed (${r.check.command})` : r.check.passed === false ? `; PROJECT CHECK STILL FAILING (${r.check.command})` : `; project check not run (${r.check.command})`) : "";
   return `(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"}${extra}${chk})\n(${describeUsage(r.usage, settings.prices)})`;
+}
+if (has("--confine") || has("--confine-no-network") || settings.confine) {
+  // Hold the AI's commands inside the project folder. If that cannot be done on this computer, stop: never run unconfined silently.
+  const { planConfine, probeConfine, setConfine, describeConfine } = await import("./confine.ts");
+  const plan = planConfine({ root, network: !(has("--confine-no-network") || settings.confine === "no-network") });
+  const problem = "problem" in plan ? plan.problem : probeConfine(plan);
+  if (problem) { console.error(problem); process.exit(2); }
+  setConfine(plan as any); if (!JSON_OUT) console.error(describeConfine(plan as any));
 }
 if (has("--sandbox")) { ctx.sandbox = (cmd, secs) => sandboxExec({ base, key }, cmd, secs); ctx.sandboxPut = (rel, content) => sandboxPut({ base, key }, rel, content); }
 const resumeRef = has("--resume") ? (arg("--resume").startsWith("-") ? "" : arg("--resume")) : "";
