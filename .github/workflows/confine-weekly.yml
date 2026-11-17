@@ -1,0 +1,32 @@
+name: confinement weekly check
+# --confine depends on a tool of the operating system (bubblewrap on Linux, sandbox-exec on Mac; Apple marks the Mac one as
+# deprecated). This runs the real confinement tests every week on the newest Linux and Mac machines GitHub offers, so that a
+# change in the operating system is noticed here first. A failed run sends GitHub's usual failure email to the repository owner.
+on:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  confine:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      SYOK_REQUIRE_CONFINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Which system
+        run: uname -a; sw_vers 2>/dev/null || cat /etc/os-release | head -3
+      - name: Linux, install bubblewrap and allow ordinary programs to use it
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: bun test test/confine.test.ts

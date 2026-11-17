@@ -55,4 +55,15 @@ case "$(uname -s)" in Linux|Darwin)
   rm -rf "$B";;
 *) echo "(not Linux or Mac: confinement is not available here)";; esac
 
+echo "=== 6. a hosted tool server reached through the mcp-remote bridge (the way to use servers that need a browser sign-in)"
+# mcp-remote is someone else's program. It runs as a local tool server and talks to the hosted one. This checks that Syok Code
+# works through it; the browser sign-in itself cannot be done by a test and is not covered here.
+P="$W/bridge"; mkdir -p "$P/.syok"; export STANDIN_KEY="" STANDIN_PORT=8793 STANDIN_LOG="$W/bridge-standin.log"
+bun "$(dirname "$0")/mcp-standin.ts" > "$W/bridge-standin.out" 2>&1 & BP=$!; sleep 2
+printf '{ "mcpServers": { "warehouse": { "command": "npx", "args": ["-y", "mcp-remote@0.16.6", "http://127.0.0.1:8793/mcp", "--allow-http", "--transport", "http-only"] } } }\n' > "$P/.syok/settings.json"
+run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Use the warehouse tool to find out how many units of the product 'red gadget' are in stock, and tell me the number." > "$W/bridge.txt" 2>&1; tail -15 "$W/bridge.txt"; kill $BP 2>/dev/null
+grep -q "tool server warehouse: 1 tools" "$W/bridge.txt" && ok "bridge: Syok Code connected through mcp-remote" || bad "bridge: did not connect through mcp-remote"
+[ -s "$W/bridge-standin.log" ] && grep -qi "red gadget" "$W/bridge-standin.log" && ok "bridge: the hosted server really received the call" || bad "bridge: the hosted server received no call"
+grep -q "4217" "$W/bridge.txt" && ok "bridge: the answer has the number only the server knows (4217)" || bad "bridge: 4217 not in the answer"
+
 echo; if [ $fails -eq 0 ]; then echo "All live checks passed."; else echo "$fails live check(s) FAILED"; exit 1; fi

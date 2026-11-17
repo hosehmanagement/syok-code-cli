@@ -56,7 +56,7 @@ test("each thing that can be wrong is named, with what to do", async () => {
   // nothing set
   let r = await doctor({ base: "", key: "", root: d, has: none, platform: "win32" });
   expect(r.ok).toBe(false); expect(by(r, "Syok address").level).toBe("fail"); expect(by(r, "Syok key").level).toBe("fail"); expect(by(r, "Syok key").fix).toContain("SYOK_API_KEY");
-  expect(by(r, "Reach Syok").level).toBe("warn"); expect(by(r, "git").level).toBe("warn"); expect(by(r, "bubblewrap")).toBeUndefined();
+  expect(by(r, "Reach Syok").level).toBe("warn"); expect(by(r, "git").level).toBe("warn"); expect(by(r, "bubblewrap")).toBeUndefined(); expect(by(r, "--confine").detail).toContain("inside WSL");
   expect(describeDoctor(r)).toContain("2 problems to fix.");
   // refused key
   let s = server("badkey"); try { r = await doctor({ base: s.base, key: KEY, root: d, has: all }); expect(r.ok).toBe(false); expect(by(r, "Reach Syok").detail).toContain("refused the key (401)"); expect(by(r, "AI answer")).toBeUndefined(); expect(s.seen.length).toBe(1); } finally { s.stop(); }

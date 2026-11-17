@@ -22,7 +22,7 @@ const LOCKED = [".git/hooks", ".syok/settings.json", ".syok/agents", ".syok/comm
 export function planConfine(o: ConfineOpts): Confine | { problem: string } {
   const platform = o.platform || process.platform, home = o.home || homedir();
   const exists = o.exists || existsSync, real = o.real || ((p: string) => { try { return realpathSync(p); } catch { return p; } });
-  if (platform === "win32") return { problem: "--confine is not available on Windows: Windows has no built-in tool for it. Use --sandbox (a remote sandbox) or WSL instead." };
+  if (platform === "win32") return { problem: "--confine is not available on Windows: Windows has no built-in tool for it. Two ways that work: run Syok Code inside WSL (Windows' own Linux: \"wsl --install\", then install Syok Code in Ubuntu), where --confine works; or use --sandbox (a remote sandbox)." };
   if (platform !== "linux" && platform !== "darwin") return { problem: "--confine works on Linux and Mac only." };
   const root = real(resolve(o.root));
   if (root === "/" || root === real(home)) return { problem: "--confine needs a project folder: it will not treat your whole home folder or the whole disk as the project." };
