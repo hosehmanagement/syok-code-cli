@@ -150,3 +150,15 @@ real("the whole program: syok --confine says what is confined, and refuses to st
   } finally { ai.stop(true); }
 }, 60000);
 test("confinement is off unless switched on", () => { expect(getConfine()).toBeNull(); });
+real("keys held by other programs (this program, the shell that started it) cannot be found from inside", async () => {
+  if (process.platform !== "linux") return; // on Linux other programs' environments are listed under /proc
+  const marker = "SYOK_PROC_MARKER_" + process.pid; process.env[marker] = "visible-secret-" + process.pid;
+  const child = Bun.spawn(["sleep", "30"], { env: { ...process.env } }); // another program that holds the value from its start
+  delete process.env[marker]; // the probing commands themselves must not be handed the value
+  try {
+    const probe = `{ for p in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $p; done; } 2>/dev/null | grep -c "visible-secret-${process.pid}"; ls /proc | grep -c '^[0-9]'`;
+    const plain = await run(probe, null); expect(+plain.out.trim().split("\n")[0]).toBeGreaterThan(0);  // without confinement it IS found
+    const inside = await run(probe); const [found, procs] = inside.out.trim().split("\n").map(Number);
+    expect(found).toBe(0); expect(procs).toBeLessThan(10); // inside, only the command's own few programs exist
+  } finally { child.kill(); }
+});

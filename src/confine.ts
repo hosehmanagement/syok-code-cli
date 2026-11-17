@@ -3,7 +3,7 @@
 //   download caches. Folders that hold keys (.ssh, .aws, the Syok and GitHub settings...) cannot even be read.
 // Linux uses bubblewrap (bwrap); Mac uses sandbox-exec. Windows has no such tool built in, so --confine is refused there.
 // If the tool is missing or does not work on this computer, Syok Code stops and says so. It never runs unconfined silently.
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { posix } from "node:path";
@@ -26,6 +26,8 @@ export function planConfine(o: ConfineOpts): Confine | { problem: string } {
   if (platform !== "linux" && platform !== "darwin") return { problem: "--confine works on Linux and Mac only." };
   const root = real(resolve(o.root));
   if (root === "/" || root === real(home)) return { problem: "--confine needs a project folder: it will not treat your whole home folder or the whole disk as the project." };
+  // Almost every install or build wants these two cache folders. They are made if missing, so that they can be left writable.
+  if (!o.exists) for (const p of [".npm", ".cache"]) { try { mkdirSync(join(home, p), { recursive: true }); } catch {} }
   const inHome = (p: string) => real(join(home, p));
   const write = [...CACHES.map(inHome).filter((p) => exists(p))];
   if (platform === "darwin") write.push(real(o.tmp || tmpdir()), "/private/tmp", "/private/var/tmp");
@@ -76,6 +78,11 @@ export function confineHint(c: Confine): string {
 export function describeConfine(c: Confine): string {
   return `Confined with ${c.kind === "bwrap" ? "bubblewrap" : "sandbox-exec"}: commands may write only in ${c.root} and the temporary folder${c.write.length ? " (plus " + c.write.length + " download cache" + (c.write.length === 1 ? "" : "s") + ")" : ""}; ${c.hide.length} key folder${c.hide.length === 1 ? "" : "s"}/file${c.hide.length === 1 ? "" : "s"} hidden; network ${c.network ? "on" : "OFF"}.`;
 }
+
+/** Why keys need confinement and not only a clean environment: without it, a command can still read the keys of this program
+ *  and of the terminal that started it from the operating system's list of running programs (on Linux, /proc). Inside the
+ *  confinement a command sees only its own programs. */
+export const KEYS_NOTE = "Without --confine, keys are removed from the environment of the commands the AI runs, but a command could still find them by looking at other running programs on this computer. With --confine it cannot.";
 
 // The confinement in force for this process. Everything that starts a command goes through shell.ts, which asks here.
 let active: Confine | null = null;

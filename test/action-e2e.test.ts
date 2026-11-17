@@ -6,6 +6,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tmpProject, call } from "./helpers.ts";
+import { planConfine, probeConfine } from "../src/confine.ts";
 
 const unix = process.platform !== "win32";
 const bundle = join(mkdtempSync(join(tmpdir(), "syok-act-")), "syok.js");
@@ -22,7 +23,7 @@ test.if(unix)("a real run: comment in, AI edits a file, branch pushed, pull requ
   const evFile = join(tools, "event.json");
   writeFileSync(evFile, JSON.stringify({ action: "created", comment: { id: 9, body: "@syok set the value to 2", user: { login: "lau", type: "User" }, author_association: "OWNER" }, issue: { number: 7, title: "Wrong value", body: "should be 2", user: { login: "reporter" } } }));
   let i = 0; const seen: any[] = [];
-  const script = [call("run_command", { command: "echo TOKEN-CHECK:[$GH_TOKEN][$GITHUB_TOKEN][$SYOK_API_KEY]" }), call("edit_file", { path: "a.js", old_text: "= 1;", new_text: "= 2;" }), call("finish", { summary: "Changed the value to 2." })];
+  const script = [call("run_command", { command: "echo TOKEN-CHECK:[$GH_TOKEN][$GITHUB_TOKEN][$SYOK_API_KEY]" }), call("run_command", { command: "echo PROC-COUNT:$({ for p in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $p; done; } 2>/dev/null | grep -c -E 'syk_e2e_sec''ret_value|ghs_e2e_tok''en_value')" }), call("edit_file", { path: "a.js", old_text: "= 1;", new_text: "= 2;" }), call("finish", { summary: "Changed the value to 2." })];
   const ai = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (req) => { seen.push({ auth: req.headers.get("authorization"), body: await req.json() }); return new Response(JSON.stringify({ choices: [{ message: script[Math.min(i++, script.length - 1)] }], usage: { prompt_tokens: 500, completion_tokens: 20, total_tokens: 520 } }), { headers: { "content-type": "application/json", "x-syok-provider": "groq", "x-syok-model": "m" } }); } });
   try {
     const out = await new Promise<string>((res) => {
@@ -32,6 +33,13 @@ test.if(unix)("a real run: comment in, AI edits a file, branch pushed, pull requ
     expect(out).toContain("[exit 0]"); expect(out).toContain("Result: opened pull request");
     // The command the AI ran saw none of the three secrets.
     const toolOut = seen[1].body.messages.at(-1).content as string; expect(toolOut).toContain("TOKEN-CHECK:[][][]");
+    // Other programs on the machine (this job's own program, the shell that started it) do hold the secrets. On Linux, when
+    // confinement works here, the AI's command must not be able to find them there either.
+    const procOut = seen[2].body.messages.at(-1).content as string;
+    const plan = process.platform === "linux" ? planConfine({ root: work }) : { problem: "not Linux" }; const why = "problem" in plan ? plan.problem : probeConfine(plan);
+    if (!why) { expect(out).toContain("(Commands run confined:"); expect(procOut).toContain("PROC-COUNT:0"); }
+    else if (process.env.SYOK_REQUIRE_CONFINE === "1" && process.platform === "linux") throw new Error("confinement is required for this run but is not working: " + why);
+    else { expect(out).toContain("(Commands are NOT confined on this machine:"); if (process.platform === "linux") expect(procOut).toMatch(/PROC-COUNT:[1-9]/); } // without confinement the secrets ARE findable: the check has teeth
     expect(seen[0].auth).toBe("Bearer syk_e2e_secret_value"); expect(JSON.stringify(seen.map((s) => s.body))).not.toContain("ghs_e2e_token_value");
     const branch = git(remote, "branch", "--list", "syok/*").replace(/^[* ]+/gm, "").trim();
     expect(branch).toMatch(/^syok\/issue-7-set-the-value-to-2-/); expect(git(remote, "show", branch + ":a.js")).toBe("module.exports = 2;"); expect(git(remote, "show", "main:a.js")).toBe("module.exports = 1;");
