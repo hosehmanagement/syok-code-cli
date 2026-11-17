@@ -100,3 +100,15 @@ test("preview lists the commands; the task tells the AI to run them itself", () 
   expect(t).toContain("for the web folder"); expect(t).toContain("Run the commands it needs yourself"); expect(t).toContain("=== Skill: deploy-check ===");
   expect(buildSkillTask(parseSkill("# tone\nBe kind.", "tone"), "")).toContain("do not stop to ask");
 });
+
+test("front matter values written on the next lines (\"name: >-\"), as CLI-Anything skills write them, are read without the marker", () => {
+  const text = "---\nname: >-\n  cli-anything-libreoffice\ndescription: >-\n  Command-line interface for Libreoffice - makes real ODF files\n  and exports them\nother: |\n  line one\n  line two\nplain: \"quoted\"\n---\n\n# cli-anything-libreoffice\n\n```bash\ncli-anything-libreoffice --help\n```\n";
+  const { meta } = splitFront(text);
+  expect(meta.name).toBe("cli-anything-libreoffice");
+  expect(meta.description).toBe("Command-line interface for Libreoffice - makes real ODF files and exports them");
+  expect(meta.other).toBe("line one line two"); expect(meta.plain).toBe("quoted");
+  const sk = parseSkill(text, "fallback");
+  expect(sk.name).toBe("cli-anything-libreoffice"); expect(sk.description.startsWith(">")).toBe(false); expect(sk.commands).toEqual(["cli-anything-libreoffice --help"]); expect(sk.needsRun).toBe(true);
+  // a value that really is just ">" followed by text on the same line is kept
+  expect(splitFront("---\nname: a\ndescription: > 5 items\n---\nx").meta.description).toBe("> 5 items");
+});

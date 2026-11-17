@@ -22,7 +22,7 @@ const NEEDS_CMD_WORDS = /\b(run|execute|install|build|compile|deploy|lint|format
 
 export const safeName = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 
-/** Split the --- front matter off the top. Only simple "key: value" lines are read. */
+/** Split the --- front matter off the top. Simple "key: value" lines are read, and values continued on indented lines. */
 export function splitFront(text: string): { meta: Record<string, string>; body: string } {
   const t = text.replace(/^﻿/, "").replace(/\r\n/g, "\n");
   const m = /^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(t);
@@ -31,7 +31,8 @@ export function splitFront(text: string): { meta: Record<string, string>; body: 
   let key = "";
   for (const line of m[1].split("\n")) {
     const kv = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line);
-    if (kv) { key = kv[1].toLowerCase(); meta[key] = kv[2].trim().replace(/^["']|["']$/g, ""); }
+    // "key: >-" and "key: |" start a value written on the following indented lines; the marker itself is not part of the value.
+    if (kv) { key = kv[1].toLowerCase(); const v = kv[2].trim(); meta[key] = /^[>|][+-]?\d*$/.test(v) ? "" : v.replace(/^["']|["']$/g, ""); }
     else if (key && /^\s+(-\s+)?\S/.test(line)) meta[key] = (meta[key] + " " + line.replace(/^\s+(-\s+)?/, "")).trim();
   }
   return { meta, body: t.slice(m[0].length) };

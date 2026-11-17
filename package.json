@@ -1,6 +1,6 @@
 {
   "name": "syok-code-cli",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Syok Code for your own computer: an AI coding agent that edits files and runs commands, using your Syok AI key.",
   "type": "module",
   "bin": {

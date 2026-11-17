@@ -57,6 +57,14 @@ The folder `vscode/` holds a small VS Code extension. It adds "Syok Code" comman
 - It needs Syok Code 0.13 or newer (`syok update`).
 - The task you type never passes through a shell: it is written to a private file that the program reads and removes (`--task-file`), and the chat stays open afterwards (`--stay`).
 
+## Using tools from CLI-Anything (GIMP, Blender, LibreOffice and others)
+[CLI-Anything](https://github.com/HKUDS/CLI-Anything) wraps desktop programs so they can be driven from the command line. Syok Code can use them as skills:
+1. Install the program itself (for example LibreOffice), then the tool: `pip install cli-anything-hub` and `cli-hub install libreoffice`.
+2. Add its instruction file as a skill: `syok skill add HKUDS/CLI-Anything/skills/cli-anything-libreoffice`.
+3. Use it: `syok skill cli-anything-libreoffice "make a one-page report and export it as report.pdf"`.
+
+The workflow "cli-anything live test" does exactly this with a real AI and checks the PDF it made.
+
 ## Checks after edits
 The AI's changes are checked automatically, so mistakes are caught while it is still working:
 - **After every edit:** a fast syntax check of that one file (JavaScript, TypeScript, JSON, Python, shell, PHP, Ruby, Go, Lua). The result is part of what the AI sees, so a broken bracket is fixed in the next step. It checks syntax only, not types, and never changes a file.
