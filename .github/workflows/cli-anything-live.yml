@@ -64,7 +64,7 @@ jobs:
           SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
           MODEL: ${{ inputs.model || 'syok-auto' }}
         run: |
-          bun src/main.ts skill cli-anything-libreoffice "Make a Writer document with the heading 'Syok CLI-Anything test' and one paragraph that says 'made by Syok Code 6x7=42'. Export it as report.pdf in this folder. Use only the cli-anything-libreoffice tool for this." --cwd work --mode auto --model "$MODEL" --max-steps 25 --json | tee run.json
+          bun src/main.ts skill cli-anything-libreoffice "Make a Writer document with the heading 'Syok CLI-Anything test' and one paragraph that says 'made by Syok Code 6x7=42'. Export it as report.pdf in this folder. Use only the cli-anything-libreoffice tool for this." --cwd work --mode auto --model "$MODEL" --json | tee run.json
       - name: Check the result (strict)
         run: |
           echo "--- uses of the tool by the AI:"; cat "$RUNNER_TEMP/calls.log"
