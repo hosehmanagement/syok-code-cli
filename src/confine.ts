@@ -46,6 +46,8 @@ export function macProfile(c: Confine): string {
     '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper") (regex #"^/dev/fd/") (regex #"^/dev/ttys[0-9]+$") (regex #"^/dev/(u)?random$"))',
     ...c.lock.map((l) => `(deny file-write* (subpath ${q(l)}))`),
     ...c.hide.map((h) => `(deny file-read* file-write* (subpath ${q(h)}))`),
+    // Other running programs (and the keys in their environment) are none of a confined command's business.
+    "(deny process-info*)", "(allow process-info* (target self))",
     ...(c.network ? [] : ["(deny network*)"]),
   ].join("\n");
 }

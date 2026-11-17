@@ -43,6 +43,7 @@ test("the Mac rule file: writes denied except the project and temp, key folders 
   expect(p).toContain('(deny file-write* (subpath "/Users/me/my \\"proj\\"/.git/hooks"))'); expect(p).toContain('(deny file-read* file-write* (subpath "/Users/me/.ssh"))'); expect(lines.at(-1)).toBe("(deny network*)");
   expect(lines.indexOf("(deny file-write*)")).toBeLessThan(lines.findIndex((l) => l.startsWith("(allow file-write* (subpath")));
   expect(macProfile({ kind: "sandbox-exec", root: "/p", network: true, home: "/h", write: [], hide: [], lock: [] })).not.toContain("network");
+  expect(p).toContain("(deny process-info*)\n(allow process-info* (target self))");
   const w = confineArgv({ kind: "sandbox-exec", root: "/p", network: true, home: "/h", write: [], hide: [], lock: [] }, "bash", ["-lc", "x"], "/p"); expect(w.exe).toBe("sandbox-exec"); expect(w.args[0]).toBe("-p"); expect(w.args.slice(2)).toEqual(["bash", "-lc", "x"]);
 });
 
@@ -160,5 +161,17 @@ real("keys held by other programs (this program, the shell that started it) cann
     const plain = await run(probe, null); expect(+plain.out.trim().split("\n")[0]).toBeGreaterThan(0);  // without confinement it IS found
     const inside = await run(probe); const [found, procs] = inside.out.trim().split("\n").map(Number);
     expect(found).toBe(0); expect(procs).toBeLessThan(10); // inside, only the command's own few programs exist
+  } finally { child.kill(); }
+});
+real("on Mac, a confined command cannot list other programs with their environment", async () => {
+  if (process.platform !== "darwin") return;
+  const value = "visible-secret-" + process.pid;
+  const child = Bun.spawn(["sleep", "30"], { env: { ...process.env, SYOK_PROC_MARKER: value } });
+  try {
+    const probe = `ps eww -ax 2>/dev/null | grep -c "${value}"; echo done`;
+    const plain = await run(probe, null); const inside = await run(probe);
+    console.log("  (Mac, programs showing the value: without confinement " + plain.out.trim().split("\n")[0] + ", inside " + inside.out.trim().split("\n")[0] + ")");
+    expect(inside.out).toContain("done"); expect(+inside.out.trim().split("\n")[0]).toBe(0);
+    const still = await run("echo ok > mac-still-works.txt && cat mac-still-works.txt && ls /usr/bin | head -1"); expect(still.out).toContain("ok"); expect(still.code).toBe(0);
   } finally { child.kill(); }
 });

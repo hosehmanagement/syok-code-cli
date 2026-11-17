@@ -64,9 +64,11 @@ bun "$(dirname "$0")/mcp-standin.ts" > "$W/bridge-standin.out" 2>&1 & BP=$!; sle
 if ! command -v mcp-remote >/dev/null 2>&1; then npm install -g mcp-remote@0.16.6 >/dev/null 2>&1; fi
 command -v mcp-remote >/dev/null 2>&1 && ok "bridge: mcp-remote is installed" || bad "bridge: mcp-remote could not be installed"
 printf '{ "mcpServers": { "warehouse": { "command": "mcp-remote", "args": ["http://127.0.0.1:8793/mcp", "--allow-http", "--transport", "http-only"] } } }\n' > "$P/.syok/settings.json"
-run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Use the warehouse tool to find out how many units of the product 'red gadget' are in stock, and tell me the number." > "$W/bridge.txt" 2>&1; grep "tool server" "$W/bridge.txt"; tail -8 "$W/bridge.txt"; kill $BP 2>/dev/null
+run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Use the warehouse tool to find out how many units of the product 'red gadget' are in stock, and tell me the number." > "$W/bridge.txt" 2>&1; grep "tool server" "$W/bridge.txt"; tail -8 "$W/bridge.txt"
+grep -q "could not start" "$W/bridge.txt" && { echo "--- mcp-remote by itself:"; (printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}\n'; sleep 8) | mcp-remote http://127.0.0.1:8793/mcp --allow-http --transport http-only 2>&1 | tail -15; }
 grep -q "tool server warehouse: 1 tools" "$W/bridge.txt" && ok "bridge: Syok Code connected through mcp-remote" || bad "bridge: did not connect through mcp-remote"
 [ -s "$W/bridge-standin.log" ] && grep -qi "red gadget" "$W/bridge-standin.log" && ok "bridge: the hosted server really received the call" || bad "bridge: the hosted server received no call"
 grep -q "4217" "$W/bridge.txt" && ok "bridge: the answer has the number only the server knows (4217)" || bad "bridge: 4217 not in the answer"
+kill $BP 2>/dev/null
 
 echo; if [ $fails -eq 0 ]; then echo "All live checks passed."; else echo "$fails live check(s) FAILED"; exit 1; fi

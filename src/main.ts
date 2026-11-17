@@ -175,7 +175,7 @@ if (process.argv[2] === "action") {
     const { planConfine, probeConfine, setConfine } = await import("./confine.ts");
     const plan = planConfine({ root: aroot }); const problem = "problem" in plan ? plan.problem : probeConfine(plan);
     if (problem) console.log("(Commands are NOT confined on this machine: " + problem.split("\n")[0].slice(0, 200) + " Keys are still removed from the commands' own environment.)");
-    else { setConfine(plan as any); console.log("(Commands run confined: they cannot write outside the project or see other programs and their keys.)"); }
+    else { setConfine(plan as any); console.log(process.platform === "linux" ? "(Commands run confined: they cannot write outside the project or see other programs and their keys.)" : "(Commands run confined: they cannot write outside the project or read folders that hold keys.)"); }
   }
   const r = await runAction({
     run: realRun, log: (x) => console.log(x), env: { ...process.env, SYOK_BASE_URL: base, SYOK_API_KEY: key }, root: aroot,

@@ -36,9 +36,9 @@ test.if(unix)("a real run: comment in, AI edits a file, branch pushed, pull requ
     // Other programs on the machine (this job's own program, the shell that started it) do hold the secrets. On Linux, when
     // confinement works here, the AI's command must not be able to find them there either.
     const procOut = seen[2].body.messages.at(-1).content as string;
-    const plan = process.platform === "linux" ? planConfine({ root: work }) : { problem: "not Linux" }; const why = "problem" in plan ? plan.problem : probeConfine(plan);
+    const plan = planConfine({ root: work }); const why = "problem" in plan ? plan.problem : probeConfine(plan);
     if (!why) { expect(out).toContain("(Commands run confined:"); expect(procOut).toContain("PROC-COUNT:0"); }
-    else if (process.env.SYOK_REQUIRE_CONFINE === "1" && process.platform === "linux") throw new Error("confinement is required for this run but is not working: " + why);
+    else if (process.env.SYOK_REQUIRE_CONFINE === "1") throw new Error("confinement is required for this run but is not working: " + why);
     else { expect(out).toContain("(Commands are NOT confined on this machine:"); if (process.platform === "linux") expect(procOut).toMatch(/PROC-COUNT:[1-9]/); } // without confinement the secrets ARE findable: the check has teeth
     expect(seen[0].auth).toBe("Bearer syk_e2e_secret_value"); expect(JSON.stringify(seen.map((s) => s.body))).not.toContain("ghs_e2e_token_value");
     const branch = git(remote, "branch", "--list", "syok/*").replace(/^[* ]+/gm, "").trim();
