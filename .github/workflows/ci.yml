@@ -58,7 +58,9 @@ jobs:
           id -u
       - run: bun test test/confine.test.ts
       - name: syok doctor names the confinement tool as found
-        run: bun src/main.ts doctor | tee doctor.txt; grep -Eq "OK    (bubblewrap|sandbox-exec): found" doctor.txt
+        run: |
+          bun src/main.ts doctor | tee doctor.txt
+          grep -Eq "OK    (bubblewrap|sandbox-exec). found" doctor.txt
   # The one-line installers are run for real on Linux, Mac and Windows against a freshly built program.
   installer:
     strategy:
