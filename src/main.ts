@@ -65,6 +65,8 @@ Usage: after each task you see tokens in and out and which provider answered; /u
   "prices": { "gpt-5": { "in": 1.25, "out": 10 } }   in .syok/settings.json: US dollars per million tokens, for a cost estimate
 GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
   syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
+Checking your setup:
+  syok doctor                                  check the address, the key, a real AI answer and the programs Syok Code uses
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
 Saved jobs (long scripts that keep running after you exit; the AI starts them with job_start):
@@ -78,12 +80,20 @@ Chats, plans and checkpoints:
   syok --continue | --resume [number|id]   pick up a saved chat (every chat is saved in .syok/sessions); syok sessions lists them
   --mode plan           planning only: it explores and writes a plan, and nothing changes until you approve
   In chat: /plan <task>  /compact [focus]  /resume [n]  /sessions  /checkpoint [name]  /checkpoints  /rewind [n]  /init  /image <file> <question>  (or write @shot.png in a message)
+Your own helpers (custom agents):
+  .syok/agents/<name>.md   a helper with its own instructions and tools ("tools: read, search" makes it read-only); syok agents lists them
+  files made for Claude Code (.claude/agents) and GitHub Copilot (.github/agents/*.agent.md) are used as they are
 Your own commands and plugins:
   .syok/commands/<name>.md becomes /<name> ($ARGUMENTS = what you type after it); syok commands lists them
   syok plugin add <owner/repo|folder> | list | remove <name>      bundles of skills, commands and hooks
 GitHub:
   syok review <pull request number or link> [--comment]   read-only review of a pull request (needs the gh program)
+  syok cloud "what to do next"                              hand your work to GitHub's cloud: pushes it to a branch, opens a draft pull request and starts the @syok job there (asks first; in chat: /cloud <what to do>)
   syok pr "title"                                          commit your changes to a branch, push it and open a pull request (asks first)
+Confinement (Linux and Mac): --confine holds every command the AI runs inside the project folder, enforced by the operating system:
+  commands may read the computer but write only in the project and the temporary folder; folders with keys (.ssh, .aws...) cannot be read
+  --confine-no-network   the same, and no network either.   "confine": true or "no-network" in .syok/settings.json makes it the default
+  Linux needs the program bubblewrap; Mac uses the built-in sandbox-exec. Not available on Windows.
 Isolation: dangerous commands are always blocked. For real isolation use the Daytona sandbox:  syok sandbox start owner/repo | status | stop   then add --sandbox
   With --sandbox, commands run in the sandbox's copy of your GitHub repository and every file the AI edits is copied there too.
   The sandbox starts from what is on GitHub, so push your own uncommitted changes first if the commands need them.
@@ -108,6 +118,7 @@ Extras (in <project>/.syok/settings.json):
   "hooks": { "PreToolUse": [{"match":"edit_file|write_file","command":"./check.sh"}], "PostToolUse": [...], "Stop": [{"command":"npm test"}] }
       your command gets the event as JSON on its input; exit code 2 blocks the action (or sends the message back to the AI for Stop)
   "mcpServers": { "name": { "command": "node", "args": ["server.js"] } }   local tool servers (MCP over stdio)
+  "mcpServers": { "name": { "url": "https://tools.example.com/mcp", "headers": { "Authorization": "Bearer \${MY_KEY}" } } }   hosted tool servers (MCP over HTTP); \${MY_KEY} is read from your environment
   "allow": ["npm run"], "deny": ["curl"]    command prefixes to always allow / block
 The AI can also delegate to helper agents (read-only explorers run in parallel) and run background jobs (dev servers).`;
 if (has("--help") || has("-h")) { console.log(HELP); process.exit(0); }
@@ -170,7 +181,18 @@ if (process.argv[2] === "action") {
   });
   console.log("Result: " + r.did); process.exit(r.code);
 }
-if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok --help"); process.exit(2); }
+if (process.argv[2] === "agents") {
+  // Lists the custom helpers found for this project. Needs no key.
+  const { loadAgents, describeAgents } = await import("./agents.ts");
+  console.log(describeAgents(loadAgents(resolve(arg("--cwd", process.cwd()))))); process.exit(0);
+}
+if (process.argv[2] === "doctor") {
+  // A health check. It runs with a missing address or key too, because finding that is its job.
+  const { doctor, describeDoctor } = await import("./doctor.ts");
+  const r = await doctor({ base, key, root: resolve(arg("--cwd", process.cwd())), model: arg("--model", "syok-coder"), self: process.argv[1] || "" });
+  console.log(JSON_OUT ? JSON.stringify(r) : describeDoctor(r)); process.exit(r.ok ? 0 : 1);
+}
+if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok doctor   (it says what is missing and how to set it)"); process.exit(2); }
 const root = resolve(arg("--cwd", process.cwd()));
 let model = arg("--model", "syok-coder"), mode = arg("--mode", "ask") as Mode;
 if (!MODES.includes(mode)) { console.error("Unknown mode. Use one of: " + MODES.join(", ")); process.exit(2); }
@@ -198,10 +220,19 @@ if (has("--no-web")) settings.web = false;
 if (has("--no-checks")) settings.checks = false;
 // What this whole session used (every task, skill and helper added up); shown by /usage and after each task.
 const sessionUsage = emptyUsage();
+let lastSummary = ""; // what the last task ended with: sent along by /cloud as notes
 function report(r: Result, extra = ""): string {
   mergeUsage(sessionUsage, r.usage);
   const chk = r.check ? (r.check.passed === true ? `; project check passed (${r.check.command})` : r.check.passed === false ? `; PROJECT CHECK STILL FAILING (${r.check.command})` : `; project check not run (${r.check.command})`) : "";
   return `(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"}${extra}${chk})\n(${describeUsage(r.usage, settings.prices)})`;
+}
+if (has("--confine") || has("--confine-no-network") || settings.confine) {
+  // Hold the AI's commands inside the project folder. If that cannot be done on this computer, stop: never run unconfined silently.
+  const { planConfine, probeConfine, setConfine, describeConfine } = await import("./confine.ts");
+  const plan = planConfine({ root, network: !(has("--confine-no-network") || settings.confine === "no-network") });
+  const problem = "problem" in plan ? plan.problem : probeConfine(plan);
+  if (problem) { console.error(problem); process.exit(2); }
+  setConfine(plan as any); if (!JSON_OUT) console.error(describeConfine(plan as any));
 }
 if (has("--sandbox")) { ctx.sandbox = (cmd, secs) => sandboxExec({ base, key }, cmd, secs); ctx.sandboxPut = (rel, content) => sandboxPut({ base, key }, rel, content); }
 const resumeRef = has("--resume") ? (arg("--resume").startsWith("-") ? "" : arg("--resume")) : "";
@@ -218,7 +249,7 @@ async function turn(text: string) {
   takeCheckpoint(ctx, cps, text, history?.length || 0);
   try {
     const r = await runAgent({ root, task: im.text, images: im.images, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken });
-    history = r.messages; persist();
+    history = r.messages; lastSummary = r.summary || lastSummary; persist();
     console.log("\n" + r.summary + "\n" + report(r));
   } catch (e: any) { console.log("Error: " + e.message); }
 }
@@ -269,6 +300,12 @@ if (process.argv[2] === "review") {
   if (has("--comment") && r.summary && (mode === "auto" || await ask("post this review as a comment on the pull request", r.summary))) { const c = realRun("gh", ["pr", "comment", ref, "--body", r.summary], root); console.log(c.code ? "Could not post the comment: " + c.out.slice(0, 200) : "Comment posted."); }
   rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1);
 }
+if (process.argv[2] === "cloud") {
+  const { sendToCloud } = await import("./cloud.ts");
+  const task = process.argv.slice(3).filter((x, i, all) => !x.startsWith("--") && !VALUE_FLAGS.has(all[i - 1] ?? "")).join(" ").trim();
+  const r = await sendToCloud({ task, run: realRun, cwd: root, approve: mode === "auto" ? async () => true : ask });
+  (r.ok ? console.log : console.error)(r.message); rl?.close(); process.exit(r.ok ? 0 : 1);
+}
 if (process.argv[2] === "pr") {
   const title = process.argv.slice(3).filter((x) => !x.startsWith("--")).join(" ").trim() || "Changes from Syok Code";
   const r = await openPr(title, realRun, root, mode === "auto" ? async () => true : ask);
@@ -306,7 +343,7 @@ if (prompt) {
   if (readOnlyRun) ctx.allowed = READONLY;
   const im = extractImages(root, prompt); im.notes.forEach((n) => console.error("(" + n + ")"));
   const r = await runAgent({ root, task: im.text, images: im.images, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken });
-  history = r.messages; persist();
+  history = r.messages; lastSummary = r.summary || lastSummary; persist();
   if (JSON_OUT) console.log(JSON.stringify({ summary: r.summary, session: sessionId, steps: r.steps, tokens: r.tokens, touched: r.touched, stopped: r.stopped, ranTests: r.ranTests, commands: r.commands, declined: r.declined, usage: r.usage, check: r.check ?? null }));
   else console.log("\n" + r.summary + "\n" + report(r));
   if (!stay) { rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1); }
@@ -325,10 +362,16 @@ for (;;) {
     const b = modeTask(slash[1] as Kind, words(slash[2]));
     if (b.error) { console.log(b.error); continue; }
     ctx.allowed = b.readOnly ? READONLY : undefined;
-    try { const r = await runAgent({ root, task: b.task, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken }); history = r.messages; persist(); console.log("\n" + r.summary + `\n(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"})`); }
+    try { const r = await runAgent({ root, task: b.task, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken }); history = r.messages; lastSummary = r.summary || lastSummary; persist(); console.log("\n" + r.summary + `\n(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"})`); }
     catch (e: any) { console.log("Error: " + e.message); } finally { ctx.allowed = undefined; }
     continue;
   }
+  if (line === "/cloud" || line.startsWith("/cloud ")) {
+    const { sendToCloud } = await import("./cloud.ts");
+    const r = await sendToCloud({ task: line.slice(6).trim(), notes: lastSummary, run: realRun, cwd: root, approve: ask });
+    console.log(r.message); continue;
+  }
+  if (line === "/agents") { const { describeAgents } = await import("./agents.ts"); console.log(describeAgents(ctx.agents || [])); continue; }
   if (line === "/diff") { const d = sessionDiff(ctx); console.log(d ? colorize(d) : "No changes yet."); continue; }
   if (line === "/jobs") { console.log(ctx.bg.list() + "\nSaved jobs (keep running after you exit):\n" + describeJobs(root)); continue; }
   if (line === "/sessions") { console.log(describeSessions(root)); continue; }
@@ -387,7 +430,7 @@ for (;;) {
   const found = skName ? loadSkills(root).get(skName.toLowerCase()) : undefined;
   if (sm && !found) { console.log(`No skill named "${skName}". Your skills:\n` + listSkills()); continue; }
   if (found) {
-    try { const r = await runSkill(found, skRest, history); history = r.messages; persist(); console.log("\n" + r.summary + "\n" + skillReport(found, r)); } catch (e: any) { console.log("Error: " + e.message); }
+    try { const r = await runSkill(found, skRest, history); history = r.messages; lastSummary = r.summary || lastSummary; persist(); console.log("\n" + r.summary + "\n" + skillReport(found, r)); } catch (e: any) { console.log("Error: " + e.message); }
     continue;
   }
   await turn(line);

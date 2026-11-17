@@ -22,7 +22,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - name: Windows tests (must pass)
-        run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts test/bridge.test.ts
+        run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts test/bridge.test.ts test/doctor.test.ts test/agents.test.ts test/mcp-http.test.ts test/symbols.test.ts test/cloud.test.ts test/confine.test.ts
       - name: Which shell was picked
         run: bun -e "import('./src/shell.ts').then(m=>console.log(m.currentShell()))"
       - name: PowerShell shell test
@@ -36,6 +36,31 @@ jobs:
       - name: Every test on Windows (information only)
         continue-on-error: true
         run: bun test ./test
+  # --confine is tested for real on Linux (bubblewrap) and Mac (sandbox-exec), as an ordinary user: writes outside the project,
+  # reading key folders and (with no-network) the network must really be refused. A tool that does not work here FAILS the job.
+  confine:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      SYOK_REQUIRE_CONFINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Linux, install bubblewrap and allow ordinary programs to use it
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          id -u
+      - run: bun test test/confine.test.ts
+      - name: syok doctor names the confinement tool as found
+        run: |
+          bun src/main.ts doctor | tee doctor.txt
+          grep -Eq "OK    (bubblewrap|sandbox-exec). found" doctor.txt
   # The one-line installers are run for real on Linux, Mac and Windows against a freshly built program.
   installer:
     strategy:

@@ -9,6 +9,8 @@ import { Bg } from "./bg.ts";
 import { startJob, jobLog, stopJob, describeJobs } from "./jobs.ts";
 import { webFetch, webSearch, checkUrl, hostOf, type WebDeps } from "./web.ts";
 import { quickCheck, quickLine } from "./checks.ts";
+import { agentsHint, loadAgents, type Agent } from "./agents.ts";
+import { findSymbol, describeSymbol, outline as symbolOutline, describeOutline, readSmall } from "./symbols.ts";
 
 /** Seconds a run_command may take: the AI's request, limited by the user's settings (default max 10 minutes, hard ceiling 24 hours). */
 export function commandTimeout(s: Settings, asked?: number): number {
@@ -17,7 +19,7 @@ export function commandTimeout(s: Settings, asked?: number): number {
   const def = Math.min(cap, Math.max(5, s.timeout_sec || 120));
   return Math.min(cap, Math.max(5, asked || def));
 }
-import type { McpClient } from "./mcp.ts";
+import type { ToolServer as McpClient } from "./mcp.ts";
 
 const SKIP = new Set([".git", "node_modules", ".venv", "__pycache__", "dist", "build", ".next", "target"]);
 const fn = (name: string, description: string, properties: any, required: string[]) => ({ type: "function", function: { name, description, parameters: { type: "object", properties, required } } });
@@ -26,6 +28,8 @@ export const TOOLS = [
   fn("read_file", "Read a text file with line numbers. Optional 1-based start_line and end_line for big files.", { path: { type: "string" }, start_line: { type: "integer" }, end_line: { type: "integer" } }, ["path"]),
   fn("search", "Search file contents with a regular expression. Returns file:line:text. Optional glob such as '*.ts' limits files.", { pattern: { type: "string" }, path: { type: "string" }, glob: { type: "string" } }, ["pattern"]),
   fn("find_files", "Find files by name pattern, for example '**/*.test.js'.", { pattern: { type: "string" } }, ["pattern"]),
+  fn("find_symbol", "Find where a function, class, type or variable is DEFINED and where it is USED, by its exact name (case-sensitive). Faster and more exact than search for names: definitions and uses come back separately with file and line. show: 'both' (default), 'definition' or 'usages'.", { name: { type: "string" }, show: { type: "string", enum: ["both", "definition", "usages"] }, path: { type: "string" } }, ["name"]),
+  fn("outline", "List what a code file defines (functions, classes, types, methods) with line numbers, without reading the whole file. Use it before read_file on a big file, then read only the lines you need.", { path: { type: "string" } }, ["path"]),
   fn("edit_file", "Replace text in an existing file. old_text must match exactly and be unique (add surrounding lines if not). Set replace_all to change every match.", { path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" }, replace_all: { type: "boolean" } }, ["path", "old_text", "new_text"]),
   fn("write_file", "Create a new file or fully replace a file with new content.", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
   fn("run_command", "Run a shell command in the project root (tests, build, git status...). Output is cut if long. timeout_sec defaults to 120 (the user can change the default and the maximum). For anything that may run longer than a few minutes use job_start instead.",{ command: { type: "string" }, timeout_sec: { type: "integer" } }, ["command"]),
@@ -37,15 +41,16 @@ export const TOOLS = [
   fn("job_stop", "Stop a saved job (and everything it started).", { id: { type: "integer" } }, ["id"]),
   fn("web_search", "Search the web. Returns a numbered list of titles, addresses and short snippets. Use it for current facts, documentation, error messages and library versions you are not sure about; then read the best page with web_fetch.", { query: { type: "string" }, max_results: { type: "integer" } }, ["query"]),
   fn("web_fetch", "Read one web page (http or https) as plain text. Long pages come in parts: the reply says which characters are shown and the start value for the next part. Never put secrets or the user's private data in the address.", { url: { type: "string" }, start: { type: "integer" }, max_chars: { type: "integer" } }, ["url"]),
-  fn("delegate", "Hand a sub-task to a helper with a fresh, empty context so it does not fill your memory. role 'explorer' (default) is read-only: use it to search or read a lot and get a short answer; several explorers in one message run in parallel. role 'worker' may edit files and run commands; use it for one self-contained change. Give a complete, specific task.", { task: { type: "string" }, role: { type: "string", enum: ["explorer", "worker"] } }, ["task"]),
+  fn("delegate", "Hand a sub-task to a helper with a fresh, empty context so it does not fill your memory. role 'explorer' (default) is read-only: use it to search or read a lot and get a short answer; several explorers in one message run in parallel. role 'worker' may edit files and run commands; use it for one self-contained change. Give a complete, specific task.", { task: { type: "string" }, role: { type: "string", description: "explorer, worker, or the name of one of the user's helpers" } }, ["task"]),
   fn("finish", "Call when the task is done (or cannot be done). Give a short plain summary.", { summary: { type: "string" } }, ["summary"]),
 ];
 
 export const WEB_TOOLS = new Set(["web_search", "web_fetch"]);
-export const READONLY = new Set(["list_files", "read_file", "search", "find_files", "finish"]);
+export const READONLY = new Set(["list_files", "read_file", "search", "find_files", "find_symbol", "outline", "finish"]);
 export function toolDefs(c: Ctx): any[] {
   let t: any[] = TOOLS.filter((x) => !c.allowed || c.allowed.has(x.function.name));
   if (c.depth > 0) t = t.filter((x) => x.function.name !== "delegate");
+  else if (c.agents?.length) t = t.map((x) => x.function.name === "delegate" ? { ...x, function: { ...x.function, description: x.function.description + agentsHint(c.agents!) } } : x);
   if (c.settings.web === false) t = t.filter((x) => !WEB_TOOLS.has(x.function.name));
   return c.allowed ? t : [...t, ...c.mcp.flatMap((m) => m.defs())];
 }
@@ -59,9 +64,9 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string> }
+export interface Ctx { agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string> }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
-  return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false } };
+  return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false }, agents: settings.agents === false ? [] : loadAgents(resolve(root)) };
 }
 function safePath(c: Ctx, p: string): { abs: string; rel: string } {
   const abs = resolve(c.root, p || ".");
@@ -141,6 +146,20 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
           if (out.length >= 200) break;
         }
         return out.length ? out.join("\n") : "No matches.";
+      }
+      case "find_symbol": {
+        const name = String(a.name || "").trim();
+        if (!/^[A-Za-z_$][A-Za-z0-9_$]*[?!]?$/.test(name)) return "Error: give one name (letters, digits, _ or $), for example find_symbol name=parseConfig. For other text use search.";
+        const { abs } = safePath(c, a.path || ".");
+        const files = statSync(abs).isDirectory() ? walk(abs, c.root) : [relative(c.root, abs).split(sep).join("/")];
+        return cut(describeSymbol(name, findSymbol(name, files, readSmall(c.root)), a.show === "definition" || a.show === "usages" ? a.show : "both"), c.profile.maxToolChars);
+      }
+      case "outline": {
+        const { abs, rel } = safePath(c, a.path);
+        if (!existsSync(abs)) return `Error: ${rel} does not exist. Use list_files or find_files.`;
+        if (statSync(abs).isDirectory()) return `Error: ${rel} is a folder. Use list_files.`;
+        const text = readSmall(c.root)(rel); if (text === null) return "Error: that file is too large or is not text.";
+        return cut(describeOutline(rel, symbolOutline(text, rel), text.split("\n").length), c.profile.maxToolChars);
       }
       case "find_files": {
         const re = globRe(a.pattern.includes("/") ? a.pattern : "**/" + a.pattern);

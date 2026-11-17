@@ -3,6 +3,7 @@
 // Everything that starts a command (run_command, background jobs, hooks) goes through here, so Windows works without WSL.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
+import { getConfine, confineArgv } from "./confine.ts";
 
 export type ShellKind = "bash" | "powershell" | "cmd";
 export interface Shell { kind: ShellKind; exe: string; label: string; hint: string }
@@ -83,6 +84,11 @@ export function shellArgs(sh: Shell, command: string): string[] {
 /** Start a command line in the right shell. Same options everywhere: own process group (so it can be stopped), hidden window on Windows. */
 export function spawnCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, stdio: Array<"ignore" | "pipe" | number>, sh: Shell = currentShell()): ChildProcess {
   const win = process.platform === "win32";
+  const c = getConfine();
+  if (c) { // --confine: the operating system holds this command inside the project folder
+    const w = confineArgv(c, sh.exe, shellArgs(sh, command), cwd);
+    return spawn(w.exe, w.args, { cwd, env: { ...env, SYOK_CONFINED: "1" }, detached: true, stdio });
+  }
   return spawn(sh.exe, shellArgs(sh, command), { cwd, env, detached: !win, windowsHide: true, windowsVerbatimArguments: win && sh.kind === "cmd", stdio });
 }
 

@@ -65,6 +65,14 @@ The folder `vscode/` holds a small VS Code extension. It adds "Syok Code" comman
 
 The workflow "cli-anything live test" does exactly this with a real AI and checks the PDF it made.
 
+## New in 0.14
+- **`syok doctor`**: checks your address, your key (never shown), a real AI answer, and the programs Syok Code uses. Each problem comes with what to do.
+- **Your own helpers**: a file `.syok/agents/reviewer.md` with a few lines of instructions makes a helper the AI can hand work to. `tools: read, search` makes it read-only. Files written for Claude Code (`.claude/agents/`) and GitHub Copilot (`.github/agents/*.agent.md`) are used as they are. `syok agents` lists them.
+- **Hosted tool servers**: in `.syok/settings.json`, `"mcpServers": { "name": { "url": "https://...", "headers": { "Authorization": "Bearer ${MY_KEY}" } } }`. `${MY_KEY}` is read from your environment, so the key is not written in the file. Syok's own keys are never handed to a tool server.
+- **`--confine`** (Linux and Mac): the operating system holds every command the AI runs inside the project folder. Commands can read the computer but write only in the project and the temporary folder, and cannot read folders that hold keys (`.ssh`, `.aws` and others). `--confine-no-network` also cuts the network. Linux needs the program bubblewrap; Mac uses the built-in sandbox-exec. Not available on Windows.
+- **`/cloud <what to do>`** (or `syok cloud "..."`): pushes your work to a branch, opens a draft pull request and starts the `@syok` job on GitHub to carry on there. Asks first, and refuses to push anything that looks like a key.
+- **`find_symbol` and `outline`**: two new tools the AI uses to find where a name is defined and used, and to see what a file contains without reading all of it. No language servers needed.
+
 ## Checks after edits
 The AI's changes are checked automatically, so mistakes are caught while it is still working:
 - **After every edit:** a fast syntax check of that one file (JavaScript, TypeScript, JSON, Python, shell, PHP, Ruby, Go, Lua). The result is part of what the AI sees, so a broken bracket is fixed in the next step. It checks syntax only, not types, and never changes a file.

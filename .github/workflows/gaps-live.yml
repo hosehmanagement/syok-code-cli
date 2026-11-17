@@ -1,0 +1,42 @@
+name: 0.14 features live test
+# With a real AI through your Syok key: syok doctor, find_symbol, a custom helper, a hosted tool server and --confine.
+# Runs from the source and from the one-file program. Uses the repository secrets SYOK_BASE_URL and SYOK_API_KEY.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model or preset"
+        default: "syok-coder"
+  pull_request:
+    paths: ['src/doctor.ts', 'src/agents.ts', 'src/mcp.ts', 'src/confine.ts', 'src/symbols.ts', 'test/live/gaps-live.sh', 'test/live/mcp-standin.ts', '.github/workflows/gaps-live.yml']
+permissions:
+  contents: read
+jobs:
+  live:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+      SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+      MODEL: ${{ inputs.model || 'syok-coder' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Linux, install bubblewrap and allow ordinary programs to use it
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Secrets present
+        run: if [ -z "$SYOK_BASE_URL" ] || [ -z "$SYOK_API_KEY" ]; then echo "the Syok secrets are not set"; exit 1; fi
+      - name: Live checks from the source
+        run: bash test/live/gaps-live.sh "$PWD/src/main.ts"
+      - name: Build the one-file program
+        run: bun build src/main.ts --target=bun --minify --outfile "$RUNNER_TEMP/syok.js"
+      - name: Live checks from the one-file program
+        run: bash test/live/gaps-live.sh "$RUNNER_TEMP/syok.js"
