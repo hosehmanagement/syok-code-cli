@@ -4,6 +4,9 @@
 set -u
 SYOK="$1"; MODEL="${MODEL:-syok-coder}"; fails=0; W="$(mktemp -d)"
 ok() { echo "PASS $1"; }; bad() { echo "FAIL $1"; fails=$((fails+1)); }
+# The answer must hold the number only the server knows. A model may write it as 4,217 or 4.217 or 4 217: that is the same number,
+# so thousands separators between digits are removed before looking. Anything else (a different number, no number) still fails.
+has_number() { sed -E 's/([0-9])[,.  ]([0-9]{3})/\1\2/g' "$2" | grep -q "$1"; }
 run() { bun "$SYOK" "$@"; }
 
 echo "=== 1. syok doctor against the real Syok"
@@ -41,7 +44,7 @@ printf '{ "mcpServers": { "warehouse": { "url": "http://127.0.0.1:8791/mcp", "he
 run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Use the warehouse tool to find out how many units of the product 'blue widget' are in stock, and tell me the number." > "$W/mcp.txt" 2>&1; tail -15 "$W/mcp.txt"; kill $SP 2>/dev/null
 grep -q "tool server warehouse: 1 tools, hosted at 127.0.0.1:8791" "$W/mcp.txt" && ok "hosted tools: connected with the key from the environment" || bad "hosted tools: did not connect"
 [ -s "$W/standin.log" ] && grep -qi "blue widget" "$W/standin.log" && ok "hosted tools: the server really received the call" || bad "hosted tools: the server received no call"
-grep -q "4217" "$W/mcp.txt" && ok "hosted tools: the answer has the number only the server knows (4217)" || bad "hosted tools: 4217 not in the answer"
+has_number 4217 "$W/mcp.txt" && ok "hosted tools: the answer has the number only the server knows (4217)" || bad "hosted tools: 4217 not in the answer"
 if grep -q "$STANDIN_KEY" "$W/mcp.txt"; then bad "hosted tools: the tool key was printed"; else ok "hosted tools: the tool key is not printed"; fi
 
 echo "=== 5. --confine with a real AI (Linux and Mac)"
@@ -68,7 +71,7 @@ run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Use the warehouse to
 grep -q "could not start" "$W/bridge.txt" && { echo "--- mcp-remote by itself:"; (printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}\n'; sleep 8) | mcp-remote http://127.0.0.1:8793/mcp --allow-http --transport http-only 2>&1 | tail -15; }
 grep -q "tool server warehouse: 1 tools" "$W/bridge.txt" && ok "bridge: Syok Code connected through mcp-remote" || bad "bridge: did not connect through mcp-remote"
 [ -s "$W/bridge-standin.log" ] && grep -qi "red gadget" "$W/bridge-standin.log" && ok "bridge: the hosted server really received the call" || bad "bridge: the hosted server received no call"
-grep -q "4217" "$W/bridge.txt" && ok "bridge: the answer has the number only the server knows (4217)" || bad "bridge: 4217 not in the answer"
+has_number 4217 "$W/bridge.txt" && ok "bridge: the answer has the number only the server knows (4217)" || bad "bridge: 4217 not in the answer"
 kill $BP 2>/dev/null
 
 echo; if [ $fails -eq 0 ]; then echo "All live checks passed."; else echo "$fails live check(s) FAILED"; exit 1; fi

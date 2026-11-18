@@ -66,6 +66,8 @@ Usage: after each task you see tokens in and out and which provider answered; /u
 GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
   syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
 Checking your setup:
+  syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks
+  syok setup --show | --reset                  see your saved choices | forget them (address and key stay)
   syok doctor                                  check the address, the key, a real AI answer and the programs Syok Code uses
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
@@ -93,7 +95,7 @@ GitHub:
 Confinement (Linux and Mac): --confine holds every command the AI runs inside the project folder, enforced by the operating system:
   it also protects your keys: without it a command could still find them by looking at other running programs on this computer
   commands may read the computer but write only in the project and the temporary folder; folders with keys (.ssh, .aws...) cannot be read
-  --confine-no-network   the same, and no network either.   "confine": true or "no-network" in .syok/settings.json makes it the default
+  --confine-no-network   the same, and no network either.   "confine": true or "no-network" in .syok/settings.json makes it the default; --no-confine switches it off for one run
   Linux needs the program bubblewrap; Mac uses the built-in sandbox-exec. Not available on Windows.
 Isolation: dangerous commands are always blocked. For real isolation use the Daytona sandbox:  syok sandbox start owner/repo | status | stop   then add --sandbox
   With --sandbox, commands run in the sandbox's copy of your GitHub repository and every file the AI edits is copied there too.
@@ -112,8 +114,8 @@ Options:
   --max-timeout <sec>   the most one command may run (default 600, up to 86400); longer work belongs in a saved job
   --no-stream           wait for the full answer instead of showing it as it is written
   --json                print the result as JSON (for tests and scripts)
-Setup: set SYOK_BASE_URL (your Syok address) and SYOK_API_KEY (a syk_ key from Syok > Developer API),
-or put {"base":"...","key":"..."} in ~/.syok/config.json.
+Setup: run "syok setup". (Or set SYOK_BASE_URL, your Syok address, and SYOK_API_KEY, a syk_ key from Syok > Developer API;
+or put {"base":"...","key":"..."} in ~/.syok/config.json.)
 In chat: /skills  /skill <name> <task>  (or /<name> <task>)  /gen /translate /debug /explain /test (same as above)  /diff (show every change so far)  /undo  /mode <m>  /model <m>  /jobs  /usage (tokens and providers this session)  /help  /exit
 Extras (in <project>/.syok/settings.json):
   "hooks": { "PreToolUse": [{"match":"edit_file|write_file","command":"./check.sh"}], "PostToolUse": [...], "Stop": [{"command":"npm test"}] }
@@ -159,6 +161,31 @@ if (["jobs", "logs", "stop"].includes(process.argv[2] ?? "")) {
 }
 const cfg = readJson(join(homedir(), ".syok", "config.json"));
 const base = process.env.SYOK_BASE_URL || cfg.base || "", key = process.env.SYOK_API_KEY || cfg.key || "";
+const { cleanDefaults, applyDefaults } = await import("./setup.ts");
+const mine = cleanDefaults(cfg.defaults); // your personal choices from "syok setup"
+if (process.argv[2] === "setup") {
+  // A few questions, asked once. Needs no key: giving one is part of it.
+  const S = await import("./setup.ts"); const sroot = resolve(arg("--cwd", process.cwd()));
+  if (has("--show")) { console.log(S.describeDefaults(S.readConfig())); process.exit(0); }
+  if (has("--reset")) { console.log(S.resetDefaults() ? "Your saved choices are forgotten. The address and the key stay." : "There were no saved choices."); process.exit(0); }
+  const { planConfine, probeConfine } = await import("./confine.ts"); const { projectCheck, hasProgram } = await import("./checks.ts"); const { writeWorkflow, WORKFLOW_PATH } = await import("./action.ts");
+  let onGithub = false; try { onGithub = /github\.com[:\/]/.test(readFileSync(join(sroot, ".git", "config"), "utf8")); } catch {}
+  const io = S.terminalIO();
+  const r = await S.runSetup({
+    root: sroot, io, hasProgram, projectCheck: projectCheck(sroot, readJson(join(sroot, ".syok", "settings.json")))?.command || "",
+    probe: (network) => { const plan = planConfine({ root: sroot, network }); return "problem" in plan ? plan.problem : probeConfine(plan); },
+    canAddJob: onGithub && !existsSync(join(sroot, WORKFLOW_PATH)), addJob: () => writeWorkflow(sroot, false),
+  });
+  io.close();
+  for (const n of r.notes) console.log("\nNote: " + n);
+  const b2 = process.env.SYOK_BASE_URL || String(r.config.base || ""), k2 = process.env.SYOK_API_KEY || String(r.config.key || "");
+  if (!b2 || !k2) { console.log("\nNot checked yet: the address or the key is still missing. Run syok setup again when you have them."); process.exit(1); }
+  console.log("\nChecking that it works...\n");
+  const { doctor, describeDoctor } = await import("./doctor.ts");
+  const dr = await doctor({ base: b2, key: k2, root: sroot, model: String(r.config.defaults?.model || "syok-coder"), self: process.argv[1] || "" });
+  console.log(describeDoctor(dr)); console.log(dr.ok ? "\nReady. Start with: syok" : "\nSaved, but something above needs fixing first. After fixing it, run: syok doctor");
+  process.exit(dr.ok ? 0 : 1);
+}
 if (process.argv[2] === "github-action") {
   // Writes the workflow file that lets people write "@syok ..." in issues and pull requests. Needs no key.
   const { writeWorkflow } = await import("./action.ts"); const aroot = resolve(arg("--cwd", process.cwd()));
@@ -199,15 +226,15 @@ if (process.argv[2] === "agents") {
 if (process.argv[2] === "doctor") {
   // A health check. It runs with a missing address or key too, because finding that is its job.
   const { doctor, describeDoctor } = await import("./doctor.ts");
-  const r = await doctor({ base, key, root: resolve(arg("--cwd", process.cwd())), model: arg("--model", "syok-coder"), self: process.argv[1] || "" });
+  const r = await doctor({ base, key, root: resolve(arg("--cwd", process.cwd())), model: arg("--model", mine.model || "syok-coder"), self: process.argv[1] || "" });
   console.log(JSON_OUT ? JSON.stringify(r) : describeDoctor(r)); process.exit(r.ok ? 0 : 1);
 }
-if (!base || !key) { console.error("Missing SYOK_BASE_URL or SYOK_API_KEY. Run: syok doctor   (it says what is missing and how to set it)"); process.exit(2); }
+if (!base || !key) { console.error("Syok Code has no address or key yet. Run: syok setup   (a few questions, asked once). To see what is missing: syok doctor"); process.exit(2); }
 const root = resolve(arg("--cwd", process.cwd()));
-let model = arg("--model", "syok-coder"), mode = arg("--mode", "ask") as Mode;
+let model = arg("--model", mine.model || "syok-coder"), mode = arg("--mode", mine.mode || "ask") as Mode;
 if (!MODES.includes(mode)) { console.error("Unknown mode. Use one of: " + MODES.join(", ")); process.exit(2); }
 const table = existsSync(join(root, "profiles.json")) ? readJson(join(root, "profiles.json")) : {};
-const settings = pluginSettings(root, readJson(join(root, ".syok", "settings.json")));
+const settings = applyDefaults(pluginSettings(root, readJson(join(root, ".syok", "settings.json"))), mine);
 if (has("--general")) settings.general = true;
 if (arg("--timeout")) settings.timeout_sec = +arg("--timeout");
 if (arg("--max-timeout")) settings.max_timeout_sec = +arg("--max-timeout");
@@ -236,12 +263,12 @@ function report(r: Result, extra = ""): string {
   const chk = r.check ? (r.check.passed === true ? `; project check passed (${r.check.command})` : r.check.passed === false ? `; PROJECT CHECK STILL FAILING (${r.check.command})` : `; project check not run (${r.check.command})`) : "";
   return `(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"}${extra}${chk})\n(${describeUsage(r.usage, settings.prices)})`;
 }
-if (has("--confine") || has("--confine-no-network") || settings.confine) {
+if (has("--confine") || has("--confine-no-network") || (settings.confine && !has("--no-confine"))) {
   // Hold the AI's commands inside the project folder. If that cannot be done on this computer, stop: never run unconfined silently.
   const { planConfine, probeConfine, setConfine, describeConfine } = await import("./confine.ts");
   const plan = planConfine({ root, network: !(has("--confine-no-network") || settings.confine === "no-network") });
   const problem = "problem" in plan ? plan.problem : probeConfine(plan);
-  if (problem) { console.error(problem); process.exit(2); }
+  if (problem) { console.error(problem + (has("--confine") || has("--confine-no-network") ? "" : "\nConfinement is on in your settings. To run without it this once, add --no-confine.")); process.exit(2); }
   setConfine(plan as any); if (!JSON_OUT) console.error(describeConfine(plan as any));
 }
 if (has("--sandbox")) { ctx.sandbox = (cmd, secs) => sandboxExec({ base, key }, cmd, secs); ctx.sandboxPut = (rel, content) => sandboxPut({ base, key }, rel, content); }

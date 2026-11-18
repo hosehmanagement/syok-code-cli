@@ -34,7 +34,7 @@ async function timed(f: typeof fetch, url: string, init: RequestInit, ms: number
   catch (e: any) { return { err: ac.signal.aborted ? `no answer within ${Math.round(ms / 1000)} seconds` : String(e?.message || e), took: Date.now() - t0 }; }
   finally { clearTimeout(t); }
 }
-const SETUP = "Set SYOK_BASE_URL and SYOK_API_KEY, or put {\"base\":\"...\",\"key\":\"...\"} in the file .syok/config.json in your home folder.";
+const SETUP = "Run: syok setup   (it asks for both). Or set SYOK_BASE_URL and SYOK_API_KEY, or put {\"base\":\"...\",\"key\":\"...\"} in the file .syok/config.json in your home folder.";
 
 export async function doctor(o: DoctorOpts): Promise<{ ok: boolean; lines: Line[] }> {
   const f = o.fetchImpl || fetch, has = o.has || hasProgram, platform = o.platform || process.platform, ms = o.timeoutMs || 30000;
