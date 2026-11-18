@@ -11,9 +11,10 @@ Status: early (v0.12). Built for computers that are fast and stable.
 
    Everything goes into the `.syok` folder in your home folder: a private copy of the Bun runtime, the one-file program and the `syok` command. Both downloads are checked against their published checksums. Run the same line again, or `syok update`, to get the newest version.
 2. In Syok AI open **Developer API**, make a key (starts with `syk_`) and note your Syok address.
-3. In your project folder run:
-   - Mac/Linux: `SYOK_BASE_URL=https://your-address SYOK_API_KEY=syk_... syok`
-   - Windows (PowerShell): `$env:SYOK_BASE_URL="https://your-address"; $env:SYOK_API_KEY="syk_..."; syok`
+3. Run `syok setup`. It asks seven short questions, once: your address, your key (hidden while you type), how much it should ask before acting, which model preset, web access, confinement, and checks after edits. It then tests that everything works. Your answers are saved in `.syok/config.json` in your home folder, readable by you alone. `syok setup --show` shows them; `syok setup --reset` forgets the choices and keeps the address and key.
+   - A flag on the command line wins over these choices, and so does a project's `.syok/settings.json`, with two exceptions: a project cannot switch off your confinement or switch web access back on.
+   - Without setup, this still works: `SYOK_BASE_URL=https://your-address SYOK_API_KEY=syk_... syok` (Windows PowerShell: `$env:SYOK_BASE_URL="https://your-address"; $env:SYOK_API_KEY="syk_..."; syok`).
+   Then run `syok` in your project folder.
 4. Type what you want. Examples: `fix the failing test`, `add a --verbose flag`.
 
 Other ways to get it: if you already have Bun, download `syok.js` and run `bun syok.js`. Self-contained programs (no runtime folder) are built by Actions > build programs.
