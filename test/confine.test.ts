@@ -11,9 +11,8 @@ import { startJob, jobLog } from "../src/jobs.ts";
 import { DEFAULT } from "../src/profiles.ts";
 
 const all = () => true;
-test("the plan: Windows is refused, the home folder is refused, key folders are hidden, caches stay writable", () => {
-  expect((planConfine({ root: "C:\\p", platform: "win32" }) as any).problem).toContain("not available on Windows");
-  expect((planConfine({ root: "C:\\p", platform: "win32" }) as any).problem).toContain("inside WSL");
+test("the plan: the home folder is refused, key folders are hidden, caches stay writable", () => {
+  expect((planConfine({ root: "C:\\p", home: "C:\\Users\\me", platform: "win32" }) as any).kind).toBe("windows-low"); // Windows has its own kind now: see confine-win.test.ts
   expect((planConfine({ root: "/home/me", home: "/home/me", platform: "linux", exists: all, real: (p) => p }) as any).problem).toContain("needs a project folder");
   expect((planConfine({ root: "/", home: "/home/me", platform: "linux", exists: all, real: (p) => p }) as any).problem).toContain("needs a project folder");
   const have = new Set(["/home/me/.ssh", "/home/me/.netrc", "/home/me/.npm", "/home/me/.syok/config.json", "/home/me/p/.git/hooks", "/home/me/p/.syok/settings.json"]);

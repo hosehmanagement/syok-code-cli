@@ -1,6 +1,7 @@
 // Which shell runs the AI's commands, on every system.
 // Linux and Mac: bash. Windows: Git Bash if installed, else PowerShell, else the old Command Prompt.
 // Everything that starts a command (run_command, background jobs, hooks) goes through here, so Windows works without WSL.
+import { winSpawn } from "./confine-win.ts";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { getConfine, confineArgv } from "./confine.ts";
@@ -73,11 +74,12 @@ let cached: Shell | null = null;
 export function currentShell(): Shell { return (cached ||= pickShell()); }
 export function resetShellCache() { cached = null; }
 
+const PS_TAIL = "\n$__ok = $?; $__c = $LASTEXITCODE; if (-not $__ok) { if ($__c) { exit $__c } else { exit 1 } }; exit 0";
 /** The arguments that make this shell run one command line. */
 export function shellArgs(sh: Shell, command: string): string[] {
   if (sh.kind === "bash") return ["-lc", command];
   // PowerShell -Command reports 1 for any failure; the lines after the command pass the real exit code of a program through.
-  if (sh.kind === "powershell") return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command + "\n$__ok = $?; $__c = $LASTEXITCODE; if (-not $__ok) { if ($__c) { exit $__c } else { exit 1 } }; exit 0"];
+  if (sh.kind === "powershell") return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command + PS_TAIL];
   return ["/d", "/s", "/c", command];
 }
 
@@ -85,6 +87,11 @@ export function shellArgs(sh: Shell, command: string): string[] {
 export function spawnCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, stdio: Array<"ignore" | "pipe" | number>, sh: Shell = currentShell()): ChildProcess {
   const win = process.platform === "win32";
   const c = getConfine();
+  if (c && c.kind === "windows-low") { // Windows: the command is started at the low level, through Syok Code's marked copy of the Command Prompt
+    const w = winSpawn(c as any, sh, command, PS_TAIL);
+    const p = spawn(w.exe, w.args, { cwd, env: { ...env, ...w.env, SYOK_CONFINED: "1" }, windowsHide: true, windowsVerbatimArguments: true, stdio });
+    p.once("close", w.cleanup); p.once("error", w.cleanup); return p;
+  }
   if (c) { // --confine: the operating system holds this command inside the project folder
     const w = confineArgv(c, sh.exe, shellArgs(sh, command), cwd);
     return spawn(w.exe, w.args, { cwd, env: { ...env, SYOK_CONFINED: "1" }, detached: true, stdio });

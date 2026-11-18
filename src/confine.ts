@@ -1,15 +1,17 @@
 // --confine: the commands the AI runs are held inside the project folder by the operating system itself.
 //   They may READ the computer (so tools work) but may WRITE only in the project folder, the temporary folder and a few
 //   download caches. Folders that hold keys (.ssh, .aws, the Syok and GitHub settings...) cannot even be read.
-// Linux uses bubblewrap (bwrap); Mac uses sandbox-exec. Windows has no such tool built in, so --confine is refused there.
-// If the tool is missing or does not work on this computer, Syok Code stops and says so. It never runs unconfined silently.
+// Linux uses bubblewrap (bwrap); Mac uses sandbox-exec. Windows itself gets write protection only (see confine-win.ts).
+// On Linux and Mac it is ON unless you switch it off. When you asked for it (a flag or a setting) and it cannot be done,
+// Syok Code stops and says so. When it is only on by default and cannot be done, Syok Code says so once and carries on.
 import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { posix } from "node:path";
-const { join, resolve } = posix; // confinement exists on Linux and Mac only, so its paths are always of that kind
+import { planWindows, prepareWindows, type WinLow } from "./confine-win.ts";
+const { join, resolve } = posix; // the Linux and Mac kind; Windows has its own file
 
-export interface Confine { kind: "bwrap" | "sandbox-exec"; root: string; network: boolean; home: string; write: string[]; hide: string[]; lock: string[] }
+export interface Confine { kind: "bwrap" | "sandbox-exec" | "windows-low"; root: string; network: boolean; home: string; write: string[]; hide: string[]; lock: string[]; low?: WinLow }
 export interface ConfineOpts { root: string; network?: boolean; platform?: string; home?: string; exists?: (p: string) => boolean; isDir?: (p: string) => boolean; real?: (p: string) => string; tmp?: string }
 
 // Download caches a build may fill. Only the cache folders themselves, never a folder whose programs are on the PATH.
@@ -22,7 +24,7 @@ const LOCKED = [".git/hooks", ".syok/settings.json", ".syok/agents", ".syok/comm
 export function planConfine(o: ConfineOpts): Confine | { problem: string } {
   const platform = o.platform || process.platform, home = o.home || homedir();
   const exists = o.exists || existsSync, real = o.real || ((p: string) => { try { return realpathSync(p); } catch { return p; } });
-  if (platform === "win32") return { problem: "--confine is not available on Windows: Windows has no built-in tool for it. Two ways that work: run Syok Code inside WSL (Windows' own Linux: \"wsl --install\", then install Syok Code in Ubuntu), where --confine works; or use --sandbox (a remote sandbox)." };
+  if (platform === "win32") return planWindows({ root: o.root, network: o.network, home });
   if (platform !== "linux" && platform !== "darwin") return { problem: "--confine works on Linux and Mac only." };
   const root = real(resolve(o.root));
   if (root === "/" || root === real(home)) return { problem: "--confine needs a project folder: it will not treat your whole home folder or the whole disk as the project." };
@@ -66,6 +68,7 @@ export function confineArgv(c: Confine, exe: string, args: string[], cwd: string
 }
 /** Try it once for real. Returns "" when it works, else what is wrong and what to do. */
 export function probeConfine(c: Confine, run: (exe: string, args: string[]) => { status: number | null; stderr: string; error?: any } = (exe, args) => { const r = spawnSync(exe, args, { encoding: "utf8", timeout: 20000 }); return { status: r.status, stderr: r.stderr || "", error: r.error }; }): string {
+  if (c.kind === "windows-low") return prepareWindows(c as any);
   const w = confineArgv(c, "/bin/sh", ["-c", "exit 0"], c.root);
   const r = run(w.exe, w.args);
   if (r.status === 0) return "";
@@ -75,9 +78,11 @@ export function probeConfine(c: Confine, run: (exe: string, args: string[]) => {
   return "--confine could not start on this computer" + (err ? ": " + err : ".");
 }
 export function confineHint(c: Confine): string {
+  if (c.kind === "windows-low") return `\nConfinement is ON (Windows write protection): your commands can read the computer but can change files only inside the project folder. Anywhere else, writing, deleting and registry changes fail with "Access is denied". The temporary folder and the npm, bun and pip caches have been moved to a place you may write. An "Access is denied" error outside the project comes from this: do not try to get around it; work inside the project or tell the user.`;
   return `\nConfinement is ON: your commands can read the computer but can write only inside the project folder and the temporary folder${c.network ? "" : ", and they have NO network"}. Folders that hold keys cannot be read. .git/hooks and the Syok settings are read-only. A "Read-only file system" or "Operation not permitted" error outside the project comes from this: do not try to get around it; work inside the project or tell the user.`;
 }
 export function describeConfine(c: Confine): string {
+  if (c.kind === "windows-low") return `Confined with Windows write protection: commands may change files only in ${c.root} and Syok Code's own temporary folder. They can still READ other files, and the network is on. (The project folder was marked for this; "syok confine undo" removes the mark.)`;
   return `Confined with ${c.kind === "bwrap" ? "bubblewrap" : "sandbox-exec"}: commands may write only in ${c.root} and the temporary folder${c.write.length ? " (plus " + c.write.length + " download cache" + (c.write.length === 1 ? "" : "s") + ")" : ""}; ${c.hide.length} key folder${c.hide.length === 1 ? "" : "s"}/file${c.hide.length === 1 ? "" : "s"} hidden; network ${c.network ? "on" : "OFF"}.`;
 }
 
