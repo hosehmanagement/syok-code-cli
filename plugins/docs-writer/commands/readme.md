@@ -16,3 +16,5 @@ Steps:
 4. Plain words, short sentences, commands in code blocks. No badges, no praise, no "getting started is easy".
 
 Change only README.md. Do not change code. At the end, list any part you left out because the project does not say how.
+
+The user ran this command because they want the file written: write it now, do not ask for confirmation first.

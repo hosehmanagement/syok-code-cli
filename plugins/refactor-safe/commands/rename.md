@@ -15,3 +15,5 @@ Steps:
 7. Run the tests again. The same tests must pass as in step 1. If one now fails, fix the rename, not the test.
 
 Finish with: how many places changed, in which files, and the test result before and after.
+
+The user ran this command because they want the rename done: do it now, do not ask for confirmation first (ask only if the old name cannot be found or two different things share it).

@@ -16,3 +16,5 @@ Steps:
 Rules: do not edit, skip, delete or loosen a test to make it pass. If you believe a test is wrong, leave it as it is and tell the user why. Do not change what the code does beyond the fix.
 
 Finish with: each failure, its cause in one sentence, and the file and line you changed.
+
+The user ran this command because they want the failures fixed: make the fix now, do not ask for confirmation first.

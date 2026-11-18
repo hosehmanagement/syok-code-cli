@@ -19,3 +19,5 @@ Steps:
    and that the checks start once that file is committed and pushed to GitHub.
 
 Rules: no secrets, no deploy step, no write permissions, no third-party actions beyond the official checkout and language setup ones. Change no other file. Do not commit or push.
+
+The user ran this command because they want the file written: when the test command works, write the file now without asking for confirmation.

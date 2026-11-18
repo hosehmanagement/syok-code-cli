@@ -16,3 +16,5 @@ Steps:
 6. Finish when the new tests run. Say how many tests there are, what they cover, and any bug found.
 
 Rules: do not change the file under test or any other source file. Do not delete or weaken existing tests. No test may depend on the network, the clock or random numbers without fixing them to known values.
+
+The user ran this command because they want the tests written: write and run them now, do not ask for confirmation first.
