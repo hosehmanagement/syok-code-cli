@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live checks of the 0.14 features with a REAL AI through the Syok key. Every check is strict: it reads files and logs,
+# Live checks of the newer features with a REAL AI through the Syok key. Every check is strict: it reads files and logs,
 # never the AI's own claim. Needs SYOK_BASE_URL and SYOK_API_KEY. Usage: gaps-live.sh <path to main.ts or syok.js>
 set -u
 SYOK="$1"; MODEL="${MODEL:-syok-coder}"; fails=0; W="$(mktemp -d)"
@@ -90,5 +90,71 @@ changed="$(cd "$PP" && git status --porcelain -- . ':(exclude).syok' | sed 's/^.
 [ "$changed" = "src/area.js src/speed.js src/volume.js " ] && ok "parallel: exactly the three files changed" || bad "parallel: changed files were: $changed"
 [ "$(cd "$PP" && git rev-parse HEAD)" = "$HEAD_BEFORE" ] && ok "parallel: no commit was made on your branch" || bad "parallel: the branch moved"
 [ "$(cd "$PP" && git worktree list | wc -l | tr -d ' ')" = "1" ] && [ -z "$(ls -A "$PP/.git/syok-parallel" 2>/dev/null)" ] && ok "parallel: no copy was left behind" || bad "parallel: a copy was left behind"
+
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+
+echo "=== 8. confinement is ON without asking (Linux and Mac), with a real AI"
+case "$(uname -s)" in Linux|Darwin)
+  B="$HOME/.syok-live-default-$$"; P="$B/proj"; O="$B/outside"; mkdir -p "$P" "$O"
+  run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Run exactly these two shell commands with run_command, one after the other, and tell me what each one printed: (1) echo inside > inside.txt && echo first-ok   (2) echo outside > $O/escape.txt; echo second-exit-code=\$?" > "$W/default.txt" 2>&1; tail -12 "$W/default.txt"
+  grep -q "^Confined with" "$W/default.txt" && grep -q "On by default" "$W/default.txt" && ok "default: confined without any flag" || bad "default: not confined without a flag"
+  [ -f "$P/inside.txt" ] && ok "default: the file inside the project was written" || bad "default: the file inside the project is missing"
+  [ ! -e "$O/escape.txt" ] && ok "default: the file outside the project was NOT written" || bad "default: a file was written outside the project"
+  run --cwd "$P" --no-confine --mode auto --no-checks --model "$MODEL" -p "Run exactly this shell command with run_command and tell me what it printed: echo outside > $O/escape2.txt; echo exit-code=\$?" > "$W/default-off.txt" 2>&1
+  [ -e "$O/escape2.txt" ] && ! grep -q "^Confined with" "$W/default-off.txt" && ok "default: --no-confine really switches it off" || bad "default: --no-confine did not switch it off"
+  rm -rf "$B";;
+*) echo "(not Linux or Mac)";; esac
+
+echo "=== 9. a language helper with a real AI: exact uses, then a compiler error found and fixed without running anything"
+LS="$REPO/node_modules/.bin/typescript-language-server"
+if [ -x "$LS" ]; then
+  P="$W/lsp"; mkdir -p "$P/src" "$P/.syok"
+  printf '{ "compilerOptions": { "strict": true, "target": "es2022", "module": "esnext", "moduleResolution": "bundler", "noEmit": true }, "include": ["src"] }\n' > "$P/tsconfig.json"
+  printf 'export function greet(name: string): string { return "hi " + name; }\nexport class Box {\n  value = 1;\n  greet() { return 2; }\n}\n' > "$P/src/a.ts"
+  printf 'import { greet, Box } from "./a";\nconst x: number = greet("y");\nexport const n = new Box().greet();\nexport { x };\n' > "$P/src/b.ts"
+  printf '{ "lsp": { "typescript": { "command": "%s", "args": ["--stdio"] } } }\n' "$LS" > "$P/.syok/settings.json"
+  ( cd "$P" && "$REPO/node_modules/.bin/tsc" -p . > "$W/lsp-before.txt" 2>&1 ) && bad "lsp: the planted type error is not there" || ok "lsp: the project starts with a type error (checked with the real compiler)"
+  run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Use the lsp tool for this, not search and not commands. First, with action diagnostics, find the compiler error in src/b.ts. Then fix it by changing only the type written on that line of src/b.ts. Then check with lsp diagnostics again that the file has no problems. Finally, with action references, tell me how many places refer to the FUNCTION greet that is defined on line 1 of src/a.ts." > "$W/lsp.txt" 2>&1; tail -25 "$W/lsp.txt"
+  grep -q '> lsp {"action":"diagnostics"' "$W/lsp.txt" && ok "lsp: the AI asked the helper for the compiler's errors" || bad "lsp: the AI did not use lsp diagnostics"
+  grep -q '> lsp {"action":"references"' "$W/lsp.txt" && ok "lsp: the AI asked the helper for the uses" || bad "lsp: the AI did not use lsp references"
+  ( cd "$P" && "$REPO/node_modules/.bin/tsc" -p . > "$W/lsp-after.txt" 2>&1 ) && ok "lsp: the real compiler now reports no error (checked by this script)" || { bad "lsp: the compiler still reports an error"; cat "$W/lsp-after.txt"; }
+  [ "$(cat "$P/src/a.ts" | wc -l | tr -d ' ')" = "5" ] && grep -q 'export function greet(name: string): string' "$P/src/a.ts" && ok "lsp: src/a.ts was left alone" || bad "lsp: src/a.ts was changed"
+else echo "(typescript-language-server is not in node_modules: skipped)"; bad "lsp: the helper for the check is missing"; fi
+
+echo "=== 10. memory across two chats with a real AI"
+export SYOK_MEMORY_DIR="$W/memory"; P="$W/mem"; mkdir -p "$P"; printf 'nothing here says how tests are run\n' > "$P/README.md"
+run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "For later chats, save this fact about this project with the remember tool, then finish: the fast tests are run with the command make quick-check-77" > "$W/mem1.txt" 2>&1; tail -6 "$W/mem1.txt"
+grep -q "> remember" "$W/mem1.txt" && ok "memory: the AI used the remember tool" || bad "memory: the AI did not use the remember tool"
+grep -rqs "quick-check-77" "$SYOK_MEMORY_DIR/projects" && ok "memory: the note is in the memory folder" || bad "memory: no note was saved"
+[ "$(ls -A "$P" | grep -v '^\.syok$' | tr '\n' ' ')" = "README.md " ] && ok "memory: nothing was written into the project" || bad "memory: the project folder changed: $(ls -A "$P" | tr '\n' ' ')"
+run --cwd "$P" --no-checks --no-web --model "$MODEL" -p "Do not read, list or search any file. From what you already know: which exact command runs the fast tests in this project? Answer in one line." > "$W/mem2.txt" 2>&1; tail -6 "$W/mem2.txt"
+grep -q "quick-check-77" "$W/mem2.txt" && ok "memory: a NEW chat knows the fact" || bad "memory: the new chat does not know the fact"
+if grep -qE "^> (read_file|search|list_files|find_files|run_command)" "$W/mem2.txt"; then bad "memory: the new chat looked in the files instead"; else ok "memory: the new chat answered without looking in any file"; fi
+run --cwd "$P" --no-memory --no-checks --no-web --model "$MODEL" -p "Do not read, list or search any file. From what you already know: which exact command runs the fast tests in this project? If you do not know, say exactly: I do not know." > "$W/mem3.txt" 2>&1
+if grep -q "quick-check-77" "$W/mem3.txt"; then bad "memory: --no-memory still gave the note to the AI"; else ok "memory: with --no-memory the AI is not given the note"; fi
+unset SYOK_MEMORY_DIR
+
+echo "=== 11. browser sign-in to a hosted tool server, then a real AI uses it"
+AH="$W/authhome"; mkdir -p "$AH"; P="$W/oauth"; mkdir -p "$P/.syok"
+export OAUTH_STANDIN_PORT=8793 OAUTH_STANDIN_NUMBER=5309 OAUTH_STANDIN_LOG="$W/oauth-standin.log"
+bun "$(dirname "$0")/oauth-standin.ts" > "$W/oauth-standin.out" 2>&1 & OP=$!; sleep 2
+printf '{ "mcpServers": { "vault": { "url": "http://127.0.0.1:8793/mcp" } } }\n' > "$P/.syok/settings.json"
+HOME="$AH" run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Say hello." > "$W/oauth-before.txt" 2>&1
+grep -q "it wants a sign-in. Run: syok mcp login vault" "$W/oauth-before.txt" && ok "sign-in: before signing in, Syok Code says exactly what to run" || bad "sign-in: no instruction before signing in"
+HOME="$AH" run mcp login vault --no-browser --cwd "$P" > "$W/oauth-login.txt" 2>&1 & LP=$!
+for i in $(seq 1 40); do grep -q "Waiting for you" "$W/oauth-login.txt" 2>/dev/null && break; sleep 0.5; done
+AUTH_URL="$(grep -oE 'http://127\.0\.0\.1:8793/authorize\?[^ ]+' "$W/oauth-login.txt" | head -1)"
+BACK="$(curl -s -o /dev/null -w '%{redirect_url}' "$AUTH_URL")"; curl -s -o /dev/null "$BACK"   # the person approving in the browser
+wait $LP; cat "$W/oauth-login.txt" | tail -3
+grep -q "Signed in to vault" "$W/oauth-login.txt" && ok "sign-in: completed through the browser steps" || bad "sign-in: did not complete"
+PASS_TOKEN="$(grep -oE '"access_token": *"[^"]+"' "$AH/.syok/mcp-auth.json" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
+[ -n "$PASS_TOKEN" ] && ok "sign-in: the pass was saved" || bad "sign-in: no pass was saved"
+case "$(uname -s)" in Linux) [ "$(stat -c %a "$AH/.syok/mcp-auth.json")" = "600" ] && ok "sign-in: the pass file is readable by the owner alone" || bad "sign-in: the pass file is readable by others";; esac
+HOME="$AH" run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Use the vault tool to get the stock number, and tell me the number." > "$W/oauth-use.txt" 2>&1; tail -8 "$W/oauth-use.txt"; sleep 1
+grep -q "tool server vault: 1 tools" "$W/oauth-use.txt" && ok "sign-in: the server now connects" || bad "sign-in: the server does not connect after signing in"
+grep -q "call with a pass" "$W/oauth-standin.log" && ok "sign-in: the server received a call carrying the pass" || bad "sign-in: no call with the pass reached the server"
+has_number 5309 "$W/oauth-use.txt" && ok "sign-in: the answer has the number only the server knows (5309)" || bad "sign-in: 5309 not in the answer"
+if [ -n "$PASS_TOKEN" ] && grep -q "$PASS_TOKEN" "$W/oauth-login.txt" "$W/oauth-use.txt" "$W/oauth-before.txt"; then bad "sign-in: the pass was printed"; else ok "sign-in: the pass is never printed"; fi
+kill $OP 2>/dev/null
 
 echo; if [ $fails -eq 0 ]; then echo "All live checks passed."; else echo "$fails live check(s) FAILED"; exit 1; fi

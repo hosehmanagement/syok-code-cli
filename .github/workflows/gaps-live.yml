@@ -8,7 +8,7 @@ on:
         description: "Model or preset"
         default: "syok-coder"
   pull_request:
-    paths: ['src/doctor.ts', 'src/agents.ts', 'src/mcp.ts', 'src/confine.ts', 'src/symbols.ts', 'test/live/gaps-live.sh', 'test/live/mcp-standin.ts', '.github/workflows/gaps-live.yml']
+    paths: ['src/doctor.ts', 'src/agents.ts', 'src/mcp.ts', 'src/confine.ts', 'src/symbols.ts', 'src/mcp-auth.ts', 'src/lsp.ts', 'src/memory.ts', 'src/parallel.ts', 'src/confine-win.ts', 'test/live/gaps-live.sh', 'test/live/mcp-standin.ts', 'test/live/oauth-standin.ts', '.github/workflows/gaps-live.yml']
 permissions:
   contents: read
 jobs:
