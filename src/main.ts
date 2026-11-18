@@ -69,6 +69,8 @@ GitHub: let people write "@syok <what to do>" in issues and pull requests (runs 
 Checking your setup:
   syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks, parallel workers
   syok setup --show | --reset                  see your saved choices | forget them (address and key stay)
+  syok mcp                                     list the hosted tool servers of this project and whether you are signed in
+  syok mcp login <name> | logout <name>        sign in to a hosted tool server through your browser | forget the pass (--no-browser: only print the address)
   syok doctor                                  check the address, the key, a real AI answer and the programs Syok Code uses
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
@@ -221,6 +223,18 @@ if (process.argv[2] === "action") {
     },
   });
   console.log("Result: " + r.did); process.exit(r.code);
+}
+if (process.argv[2] === "mcp") {
+  // Signing in to hosted tool servers through the browser. Needs no Syok key.
+  const A = await import("./mcp-auth.ts"); const mroot = resolve(arg("--cwd", process.cwd()));
+  const servers = (readJson(join(mroot, ".syok", "settings.json")).mcpServers || {}) as Record<string, any>;
+  const sub = process.argv[3], name = process.argv[4];
+  if (sub !== "login" && sub !== "logout") { console.log(A.describeLogins(servers)); process.exit(0); }
+  if (!name || name.startsWith("--") || !servers[name]) { console.error(name && !name.startsWith("--") ? `There is no tool server named ${name} in this project's .syok/settings.json.` : `Say which server: syok mcp ${sub} <name>`); console.error(A.describeLogins(servers)); process.exit(2); }
+  if (sub === "logout") { console.log(A.logout(name, servers[name])); process.exit(0); }
+  const { secretOf } = await import("./mcp.ts");
+  const r = await A.login(name, { url: servers[name].url, oauth: servers[name].oauth ? { ...servers[name].oauth, client_secret: secretOf(servers[name]) } : undefined }, { log: (t) => console.log(t), openUrl: has("--no-browser") ? () => {} : undefined });
+  console.log(r.message); process.exit(r.ok ? 0 : 1);
 }
 if (process.argv[2] === "agents") {
   // Lists the custom helpers found for this project. Needs no key.

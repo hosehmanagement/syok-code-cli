@@ -1,12 +1,15 @@
 // Minimal MCP client. Lets Syok Code use tool servers: local ones (a program on this computer, over stdio) and hosted ones
-// (a web address, over HTTP with a fixed key).
+// (a web address, over HTTP, with a fixed key or with a browser sign-in: see mcp-auth.ts and "syok mcp login <name>").
 // Configure in .syok/settings.json:
 //   { "mcpServers": { "local":  { "command": "node", "args": ["server.js"], "env": {} },
 //                     "hosted": { "url": "https://tools.example.com/mcp", "headers": { "Authorization": "Bearer ${MY_TOOLS_KEY}" } } } }
 // In a header value, ${NAME} is replaced by that environment variable, so the key itself need not be written in the file.
 import { spawn, type ChildProcess } from "node:child_process";
 import { cleanEnv, SECRET_ENV } from "./shell.ts";
-export interface McpCfg { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> }
+import { passFor } from "./mcp-auth.ts";
+export interface McpCfg { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>;
+  /** Only for a sign-in service that does not accept apps it does not know: the id (and secret) of an app you registered there. ${NAME} in the secret is read from the environment. */
+  oauth?: { client_id?: string; client_secret?: string; scope?: string } }
 export class McpClient {
   proc!: ChildProcess; buf = ""; id = 0; pending = new Map<number, (m: any) => void>(); tools: any[] = []; dead = "";
   constructor(public name: string, public cfg: McpCfg, public cwd: string) {}
@@ -71,13 +74,21 @@ export function fillHeaders(headers: Record<string, string> | undefined, env: Re
 /** A hosted tool server (MCP "Streamable HTTP"): every request is one POST; the answer is JSON or a short event stream. */
 export class HttpMcp {
   tools: any[] = []; id = 0; session = ""; headers: Record<string, string> = {}; version = "2025-06-18";
-  constructor(public name: string, public cfg: McpCfg, public fetchImpl: typeof fetch = fetch) {}
-  private async post(body: any, ms: number): Promise<any> {
+  /** The name as written in the settings (the tool name is a cleaned form of it). */
+  shown = ""; home?: string; private pass = ""; private ownKey = false;
+  constructor(public name: string, public cfg: McpCfg, public fetchImpl: typeof fetch = fetch) { this.shown = name; }
+  private async post(body: any, ms: number, renewed = false): Promise<any> {
     const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), ms);
     try {
       const res = await this.fetchImpl(this.cfg.url!, { method: "POST", redirect: "error", signal: ac.signal, body: JSON.stringify(body),
-        headers: { ...this.headers, "content-type": "application/json", accept: "application/json, text/event-stream", ...(this.session ? { "mcp-session-id": this.session } : {}), ...(body.method !== "initialize" ? { "mcp-protocol-version": this.version } : {}) } });
-      if (res.status === 401 || res.status === 403) throw new Error(`the server refused the key (${res.status})`);
+        headers: { ...this.headers, ...(this.pass ? { authorization: "Bearer " + this.pass } : {}), "content-type": "application/json", accept: "application/json, text/event-stream", ...(this.session ? { "mcp-session-id": this.session } : {}), ...(body.method !== "initialize" ? { "mcp-protocol-version": this.version } : {}) } });
+      if (res.status === 401 && !this.ownKey) {
+        try { await res.body?.cancel(); } catch {}
+        // A pass that ran out is renewed once, quietly. Without one, the user has to sign in: the browser is never opened from here.
+        if (this.pass && !renewed) { this.pass = await passFor(this.cfg.url!, { fetchImpl: this.fetchImpl, home: this.home, force: true, clientSecret: secretOf(this.cfg) }); if (this.pass) { clearTimeout(timer); return await this.post(body, ms, true); } }
+        throw Object.assign(new Error(`it wants a sign-in. Run: syok mcp login ${this.shown}`), { needsLogin: true });
+      }
+      if (res.status === 401 || res.status === 403) throw new Error(`the server refused the ${this.pass ? "pass" : "key"} (${res.status})`);
       if (res.status === 404 && this.session) throw Object.assign(new Error("the server forgot this session"), { expired: true });
       if (!res.ok) throw new Error(`the server answered with error ${res.status}`);
       const sid = res.headers.get("mcp-session-id"); if (sid && body.method === "initialize") this.session = sid;
@@ -98,6 +109,8 @@ export class HttpMcp {
   async start() {
     const p = urlProblem(this.cfg.url || ""); if (p) throw new Error(p);
     const h = fillHeaders(this.cfg.headers); if (h.problem) throw new Error(h.problem); this.headers = h.headers;
+    this.ownKey = Object.keys(this.headers).some((k) => k.toLowerCase() === "authorization"); // a key from the settings always wins over a sign-in
+    this.pass = this.ownKey ? "" : await passFor(this.cfg.url!, { fetchImpl: this.fetchImpl, home: this.home, clientSecret: secretOf(this.cfg) });
     this.session = "";
     const init = await this.req("initialize", { protocolVersion: this.version, capabilities: {}, clientInfo: { name: "syok-code", version: "0.1.0" } }, 20000);
     if (init?.protocolVersion) this.version = String(init.protocolVersion);
@@ -111,20 +124,26 @@ export class HttpMcp {
     let r: any; try { r = await once(); } catch (e: any) { if (!e?.expired) throw e; await this.start(); r = await once(); } // a forgotten session is started again, once
     return resultText(r);
   }
-  stop() { if (this.session) { const s = this.session; this.session = ""; this.fetchImpl(this.cfg.url!, { method: "DELETE", headers: { ...this.headers, "mcp-session-id": s } }).catch(() => {}); } }
+  stop() { if (this.session) { const s = this.session; this.session = ""; this.fetchImpl(this.cfg.url!, { method: "DELETE", headers: { ...this.headers, ...(this.pass ? { authorization: "Bearer " + this.pass } : {}), "mcp-session-id": s } }).catch(() => {}); } }
 }
 async function readCapped(res: Response, max: number): Promise<string> {
   const rd = res.body?.getReader(); if (!rd) return ""; const dec = new TextDecoder(); let out = "";
   for (;;) { const { done, value } = await rd.read(); if (done) break; out += dec.decode(value, { stream: true }); if (out.length > max) { try { await rd.cancel(); } catch {} throw new Error("the server's answer is too large"); } }
   return out + dec.decode();
 }
+/** The app secret for a sign-in, with ${NAME} read from the environment (never one of Syok's own keys). */
+export function secretOf(cfg: McpCfg): string | undefined {
+  const v = cfg.oauth?.client_secret; if (!v) return undefined;
+  const r = fillHeaders({ s: v }); return r.problem ? undefined : r.headers.s;
+}
 export type ToolServer = McpClient | HttpMcp;
-export async function startMcp(servers: Record<string, McpCfg> | undefined, cwd: string, log: (s: string) => void, fetchImpl: typeof fetch = fetch): Promise<ToolServer[]> {
+export async function startMcp(servers: Record<string, McpCfg> | undefined, cwd: string, log: (s: string) => void, fetchImpl: typeof fetch = fetch, home?: string): Promise<ToolServer[]> {
   const out: ToolServer[] = [];
   for (const [name, cfg] of Object.entries(servers || {})) {
     const safe = name.replace(/[^\w-]/g, "_");
     if (!cfg || (!cfg.url && !cfg.command)) { log(`(tool server ${name} could not start: it needs a "command" or a "url")`); continue; }
     const c: ToolServer = cfg.url ? new HttpMcp(safe, cfg, fetchImpl) : new McpClient(safe, cfg, cwd);
+    if (c instanceof HttpMcp) { c.shown = name; c.home = home; }
     try { await c.start(); out.push(c); log(`(tool server ${name}: ${c.tools.length} tools${cfg.url ? ", hosted at " + new URL(cfg.url).host : ""})`); } catch (e: any) { c.stop(); log(`(tool server ${name} could not start: ${e.message})`); }
   }
   return out;

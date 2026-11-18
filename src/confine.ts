@@ -15,7 +15,7 @@ export interface ConfineOpts { root: string; network?: boolean; platform?: strin
 // Download caches a build may fill. Only the cache folders themselves, never a folder whose programs are on the PATH.
 const CACHES = [".npm", ".cache", ".bun/install/cache", ".cargo/registry", ".cargo/git", "go/pkg/mod", ".pnpm-store", ".local/share/pnpm/store", ".gradle/caches", ".m2/repository", "Library/Caches"];
 // Places that hold keys and logins: not readable from inside.
-const SECRETS = [".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker", ".config/gh", ".config/gcloud", ".config/jcode", ".syok/config.json", ".modal.toml", ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".config/git/credentials", ".claude.json", ".codex/auth.json"];
+const SECRETS = [".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker", ".config/gh", ".config/gcloud", ".config/jcode", ".syok/config.json", ".syok/mcp-auth.json", ".modal.toml", ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".config/git/credentials", ".claude.json", ".codex/auth.json"];
 // Inside the project, files that would run later OUTSIDE the confinement: readable, not writable.
 const LOCKED = [".git/hooks", ".syok/settings.json", ".syok/agents", ".syok/commands"];
 
