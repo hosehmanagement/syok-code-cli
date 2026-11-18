@@ -28,6 +28,8 @@ export const SAFE = [
 export interface Settings { allow?: string[]; deny?: string[];
   /** Hold the AI's commands inside the project folder (Linux, Mac): true, or "no-network" to cut the network too. */
   confine?: boolean | "no-network";
+  /** Memory across chats (short notes the AI saves and reads back; kept in ~/.syok/memory on this computer): false switches it off. */
+  memory?: boolean;
   /** Language helpers (exact definitions, uses and compiler errors): false switches them off; or name your own per language,
    *  for example { "python": { "command": "pylsp" } }. Syok Code never downloads one by itself. See "syok lang". */
   lsp?: false | Record<string, { command: string; args?: string[] } | false>;

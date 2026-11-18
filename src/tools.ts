@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { memoryDir, addNote, forgetNote, noteProblem, tidy } from "./memory.ts";
 import { LspSet, lspTool, lspAvailable } from "./lsp.ts";
 import { workerLimit, isGitProject } from "./parallel.ts";
 import { resolve, relative, dirname, join, sep } from "node:path";
@@ -31,6 +32,7 @@ export const TOOLS = [
   fn("search", "Search file contents with a regular expression. Returns file:line:text. Optional glob such as '*.ts' limits files.", { pattern: { type: "string" }, path: { type: "string" }, glob: { type: "string" } }, ["pattern"]),
   fn("find_files", "Find files by name pattern, for example '**/*.test.js'.", { pattern: { type: "string" } }, ["pattern"]),
   fn("find_symbol", "Find where a function, class, type or variable is DEFINED and where it is USED, by its exact name (case-sensitive). Faster and more exact than search for names: definitions and uses come back separately with file and line. show: 'both' (default), 'definition' or 'usages'.", { name: { type: "string" }, show: { type: "string", enum: ["both", "definition", "usages"] }, path: { type: "string" } }, ["name"]),
+  fn("remember", "Save one short note to your memory, which you are given again at the start of every later chat. Use it sparingly, for facts worth having next time that are NOT already in the project's instruction files or obvious from the code: how to build, test or run this project when it took effort to find out; a decision the user made; a preference the user stated. One plain sentence, at most 280 characters. Never a key, password or token. about 'project' (default) is for this project only; about 'user' is read in every project and the user is asked first. To correct a note, pass forget with a few words of the old note (and text with the new one if there is one).", { text: { type: "string", description: "the note: one sentence" }, about: { type: "string", enum: ["project", "user"] }, forget: { type: "string", description: "a few words of an existing note to remove" } }, []),
   fn("lsp", "Exact code intelligence from the language's own tooling (a language helper is installed for this project). Use it when the answer must be exact: action 'definition' = where the name on a line is really defined (follows imports and types); 'references' = every real use of it across the project, the right ones only even when other things share the name; 'hover' = its type and documentation; 'diagnostics' = the errors and warnings the compiler reports for a file (use after editing, before running the tests); 'symbols' = what a file defines, or with query (and no path) a search for a name across the project. For definition, references and hover give path, line and symbol (the name as written on that line).", { action: { type: "string", enum: ["definition", "references", "hover", "diagnostics", "symbols"] }, path: { type: "string" }, line: { type: "integer", description: "line number, starting at 1" }, symbol: { type: "string", description: "the name on that line to ask about" }, query: { type: "string", description: "for symbols without a path: the name to search for" } }, ["action"]),
   fn("outline", "List what a code file defines (functions, classes, types, methods) with line numbers, without reading the whole file. Use it before read_file on a big file, then read only the lines you need.", { path: { type: "string" } }, ["path"]),
   fn("edit_file", "Replace text in an existing file. old_text must match exactly and be unique (add surrounding lines if not). Set replace_all to change every match.", { path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" }, replace_all: { type: "boolean" } }, ["path", "old_text", "new_text"]),
@@ -57,6 +59,7 @@ export function toolDefs(c: Ctx): any[] {
   else if (c.agents?.length) t = t.map((x) => x.function.name === "delegate" ? { ...x, function: { ...x.function, description: x.function.description + agentsHint(c.agents!) } } : x);
   if (c.settings.web === false) t = t.filter((x) => !WEB_TOOLS.has(x.function.name));
   if (!lspAvailable(c.root, c.settings.lsp)) t = t.filter((x) => x.function.name !== "lsp");
+  if (c.settings.memory === false || c.depth > 0) t = t.filter((x) => x.function.name !== "remember");
   if (c.depth > 0 || c.mode === "plan" || workerLimit(c.settings) < 1 || !isGitProject(c.root)) t = t.filter((x) => x.function.name !== "parallel_edit");
   return c.allowed ? t : [...t, ...c.mcp.flatMap((m) => m.defs())];
 }
@@ -70,7 +73,7 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string> }
+export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string> }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
   return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false }, agents: settings.agents === false ? [] : loadAgents(resolve(root)) };
 }
@@ -159,6 +162,20 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
         const { abs } = safePath(c, a.path || ".");
         const files = statSync(abs).isDirectory() ? walk(abs, c.root) : [relative(c.root, abs).split(sep).join("/")];
         return cut(describeSymbol(name, findSymbol(name, files, readSmall(c.root)), a.show === "definition" || a.show === "usages" ? a.show : "both"), c.profile.maxToolChars);
+      }
+      case "remember": {
+        if (c.settings.memory === false) return "Error: memory is switched off in the settings.";
+        if (c.depth > 0) return "Error: only the main agent saves notes. Put what you learned in your report instead.";
+        const dir = c.memoryDir || memoryDir(); const scope = a.about === "user" ? "me" : "project"; const said: string[] = [];
+        if (a.forget) said.push(forgetNote(dir, scope, c.root, String(a.forget)).message);
+        if (a.text) {
+          const text = tidy(a.text); const bad = noteProblem(text);
+          if (bad) said.push("Not saved: " + bad + ".");
+          else if (scope === "me" && c.mode === "auto") said.push("Not saved: a note about the user is read in every project, so it needs the user's yes, and nobody can be asked in this mode. If it helps this project, save it with about 'project'.");
+          else if (scope === "me" && !(await c.ask("Remember this about you, for every project?", text))) said.push("The user said no: not saved.");
+          else said.push(addNote(dir, scope, c.root, text).message);
+        }
+        return said.join("\n") || "Error: give text (a note to save) or forget (words of a note to remove).";
       }
       case "lsp": {
         if (c.settings.lsp === false) return "Error: language helpers are switched off in the settings.";

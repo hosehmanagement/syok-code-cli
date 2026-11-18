@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { createInterface } from "node:readline/promises";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { runAgent, makeCtx, undoAll, askModel, type Msg , emptyUsage, mergeUsage, describeUsage, type Result } from "./agent.ts";
@@ -67,10 +67,11 @@ Usage: after each task you see tokens in and out and which provider answered; /u
 GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
   syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
 Checking your setup:
-  syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks, parallel workers
+  syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks, parallel workers, memory
   syok setup --show | --reset                  see your saved choices | forget them (address and key stay)
   syok mcp                                     list the hosted tool servers of this project and whether you are signed in
   syok mcp login <name> | logout <name>        sign in to a hosted tool server through your browser | forget the pass (--no-browser: only print the address)
+  syok memory | memory forget p2 | memory clear   the notes kept between chats: show them, remove one, remove all (in chat: /memory). --no-memory switches it off for one run
   syok lang                                    language helpers for this project: which are found, and the one line that installs a missing one
   syok doctor                                  check the address, the key, a real AI answer and the programs Syok Code uses
 Updating:
@@ -253,6 +254,12 @@ if (process.argv[2] === "confine") {
   console.log(marked.length ? "Folders that confinement has marked so confined commands may write in them:\n" + marked.map((m) => "  " + m).join("\n") + "\nRemove the mark from this folder: syok confine undo" : "Confinement has marked no folder on this computer. Use it with: syok --confine");
   process.exit(0);
 }
+if (process.argv[2] === "memory") {
+  // The notes Syok Code keeps between chats: show them, remove one, remove all. Needs no key.
+  const M = await import("./memory.ts"); const mroot = resolve(arg("--cwd", process.cwd()));
+  const words = process.argv.slice(3).filter((w, i, all) => !w.startsWith("--") && all[i - 1] !== "--cwd");
+  console.log(M.memoryCommand(M.memoryDir(), mroot, words, readJson(join(mroot, ".syok", "settings.json")).memory !== false && cleanDefaults(cfg.defaults).memory !== false)); process.exit(0);
+}
 if (process.argv[2] === "lang") {
   // Which languages this project uses and whether a language helper is found for each. Needs no key.
   const { describeLangs } = await import("./lsp.ts"); const lroot = resolve(arg("--cwd", process.cwd()));
@@ -294,6 +301,7 @@ process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exi
 const onToken = !JSON_OUT && !has("--no-stream") ? (s: string) => process.stdout.write(s) : undefined;
 ctx.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
 if (has("--no-web")) settings.web = false;
+if (has("--no-memory")) settings.memory = false;
 if (arg("--workers")) settings.parallel_workers = Math.floor(+arg("--workers")) || 0;
 if (has("--no-checks")) settings.checks = false;
 // What this whole session used (every task, skill and helper added up); shown by /usage and after each task.
@@ -457,6 +465,7 @@ for (;;) {
     const r = await sendToCloud({ task: line.slice(6).trim(), notes: lastSummary, run: realRun, cwd: root, approve: ask });
     console.log(r.message); continue;
   }
+  if (line === "/memory" || line.startsWith("/memory ")) { const M = await import("./memory.ts"); console.log(M.memoryCommand(M.memoryDir(), root, line.split(/\s+/).slice(1), settings.memory !== false)); continue; }
   if (line === "/agents") { const { describeAgents } = await import("./agents.ts"); console.log(describeAgents(ctx.agents || [])); continue; }
   if (line === "/diff") { const d = sessionDiff(ctx); console.log(d ? colorize(d) : "No changes yet."); continue; }
   if (line === "/jobs") { console.log(ctx.bg.list() + "\nSaved jobs (keep running after you exit):\n" + describeJobs(root)); continue; }

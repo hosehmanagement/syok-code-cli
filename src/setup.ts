@@ -11,7 +11,7 @@ import { MODES, type Mode, type Settings } from "./perm.ts";
 import { addressProblem, keyShape } from "./doctor.ts";
 import { workerLimit, DEFAULT_WORKERS, MAX_WORKERS } from "./parallel.ts";
 
-export interface Defaults { mode?: Mode; model?: string; web?: boolean; confine?: boolean | "no-network"; checks?: boolean; parallel_workers?: number }
+export interface Defaults { mode?: Mode; model?: string; web?: boolean; confine?: boolean | "no-network"; checks?: boolean; parallel_workers?: number; memory?: boolean }
 export interface Config { base?: string; key?: string; defaults?: Defaults; [other: string]: unknown }
 export interface SetupIO { ask(question: string, o?: { secret?: boolean }): Promise<string>; say(text: string): void; ended?: () => boolean }
 
@@ -26,6 +26,7 @@ export function cleanDefaults(d: unknown): Defaults {
   if (typeof x.web === "boolean") out.web = x.web;
   if (x.confine === true || x.confine === false || x.confine === "no-network") out.confine = x.confine;
   if (typeof x.checks === "boolean") out.checks = x.checks;
+  if (typeof x.memory === "boolean") out.memory = x.memory;
   if (typeof x.parallel_workers === "number" && Number.isInteger(x.parallel_workers) && x.parallel_workers >= 0 && x.parallel_workers <= MAX_WORKERS) out.parallel_workers = x.parallel_workers;
   return out;
 }
@@ -47,6 +48,7 @@ export function applyDefaults(project: Settings, d: Defaults): Settings {
   if (d.confine !== undefined && rank(d.confine) > rank(s.confine)) s.confine = d.confine;
   if (d.web === false) s.web = false;
   if (s.checks === undefined && d.checks !== undefined) s.checks = d.checks;
+  if (d.memory === false) s.memory = false; // you said no memory: a project cannot switch it back on
   // Workers spend your keys faster, so a project may lower your number and never raise it.
   if (d.parallel_workers !== undefined) s.parallel_workers = s.parallel_workers === undefined ? d.parallel_workers : Math.min(workerLimit(s), d.parallel_workers);
   return s;
@@ -73,7 +75,8 @@ export function describeDefaults(cfg: Config, env: Record<string, string | undef
   L.push(`  Confinement           ${confineText(d.confine)}`);
   L.push(`  Checks after edits    ${yesNo(d.checks !== false)}`);
   L.push(`  Parallel workers      ${(d.parallel_workers ?? DEFAULT_WORKERS) === 0 ? "off" : "up to " + (d.parallel_workers ?? DEFAULT_WORKERS) + " at once, each in its own copy of the project"}`);
-  L.push("A flag on the command line wins over these; so does a project's .syok/settings.json (it cannot loosen confinement, switch web back on, or raise the number of workers).");
+  L.push(`  Memory across chats   ${yesNo(d.memory !== false)}`);
+  L.push("A flag on the command line wins over these; so does a project's .syok/settings.json (it cannot loosen confinement, switch web or memory back on, or raise the number of workers).");
   L.push("Change them: syok setup     Forget the choices (address and key stay): syok setup --reset");
   return L.join("\n");
 }
@@ -118,11 +121,11 @@ async function yn(io: SetupIO, question: string, current: boolean): Promise<bool
 export async function runSetup(o: SetupOpts): Promise<SetupResult> {
   const home = o.home || homedir(), io = o.io, platform = o.platform || process.platform, env = o.env || process.env;
   const cfg = readConfig(home); const d = cleanDefaults(cfg.defaults); const notes: string[] = [];
-  io.say("Syok Code setup. Eight short questions. Press Enter to keep what is shown as current. Nothing is saved until the end.\n");
+  io.say("Syok Code setup. Nine short questions. Press Enter to keep what is shown as current. Nothing is saved until the end.\n");
 
   // 1. The address.
   let base = String(cfg.base || "");
-  io.say("1 of 8. Your Syok address: the web address of your Syok, for example https://syok-ai.com");
+  io.say("1 of 9. Your Syok address: the web address of your Syok, for example https://syok-ai.com");
   if (env.SYOK_BASE_URL) io.say("   (SYOK_BASE_URL is set on this computer. It is used instead of what you save here, until you remove it.)");
   for (let tries = 0; tries < 3; tries++) {
     const a = (await io.ask(`Address${base ? ` [${base}]` : ""}: `)).trim(); const next = a || base;
@@ -132,7 +135,7 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
 
   // 2. The key. Typed blind, and never repeated back.
   let key = String(cfg.key || "");
-  io.say("\n2 of 8. Your Syok key: in Syok, open Developer API and make a key. It starts with syk_ and is shown once.");
+  io.say("\n2 of 9. Your Syok key: in Syok, open Developer API and make a key. It starts with syk_ and is shown once.");
   io.say("   What you type or paste here stays hidden.");
   if (env.SYOK_API_KEY) io.say("   (SYOK_API_KEY is set on this computer. It is used instead of what you save here, until you remove it.)");
   const k = (await io.ask(`Key${key ? " [press Enter to keep the saved one]" : ""}: `, { secret: true })).trim();
@@ -141,7 +144,7 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
 
   // 3. How much it asks.
   io.say("");
-  let mode = await pick<Mode>(io, "3 of 8. How much should it ask before acting?", (MODES as readonly Mode[]).map((m) => ({ value: m, text: `${m}: ${MODE_TEXT[m]}` })), d.mode ?? ("ask" as Mode));
+  let mode = await pick<Mode>(io, "3 of 9. How much should it ask before acting?", (MODES as readonly Mode[]).map((m) => ({ value: m, text: `${m}: ${MODE_TEXT[m]}` })), d.mode ?? ("ask" as Mode));
   if (mode === ("auto" as Mode) && d.mode !== mode) {
     io.say("   In auto it edits files and runs commands with no question to you. That is meant for a throwaway folder or a confined run.");
     if (!(await yn(io, "   Make auto your everyday default?", false))) { mode = d.mode ?? ("ask" as Mode); io.say(`   Kept ${mode}.`); }
@@ -152,17 +155,17 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
   const known = [{ value: "syok-coder", text: "syok-coder: tuned for programming" }, { value: "syok-auto", text: "syok-auto: general routing, for all kinds of work" }];
   const curModel = d.model ?? "syok-coder";
   if (!known.some((x) => x.value === curModel)) known.push({ value: curModel, text: `${curModel}: the one you saved` });
-  const model = await pick(io, "4 of 8. Which model preset? (Syok still switches providers by itself when one runs out.)", known, curModel);
+  const model = await pick(io, "4 of 9. Which model preset? (Syok still switches providers by itself when one runs out.)", known, curModel);
 
   // 5. The web.
   io.say("");
-  const web = await yn(io, "5 of 8. May it search the web and read pages when that helps? (It still asks before reading a site it has not been allowed.)", d.web !== false);
+  const web = await yn(io, "5 of 9. May it search the web and read pages when that helps? (It still asks before reading a site it has not been allowed.)", d.web !== false);
 
   // 6. Confinement.
   io.say("");
   let confine: Defaults["confine"] = d.confine ?? (platform === "win32" ? false : true);
   if (platform === "win32") {
-    io.say("6 of 8. Confinement on Windows gives write protection: the AI's commands can change files only inside the project folder.");
+    io.say("6 of 9. Confinement on Windows gives write protection: the AI's commands can change files only inside the project folder.");
     io.say("   They can still read your other files. To make it work, the project folder gets a mark that lets low-privilege programs");
     io.say("   write in it; \"syok confine undo\" removes the mark. (Inside WSL, Windows' built-in Linux, you get the full kind instead.)");
     confine = await yn(io, "   Switch it on for every project?", confine === true) ? true : false;
@@ -172,7 +175,7 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
       else io.say("   Tried it on this project folder: it works.");
     }
   } else {
-    confine = await pick<Defaults["confine"]>(io, "6 of 8. Confinement: hold the AI's commands inside the project folder, so they cannot change your other files or read your keys?", [
+    confine = await pick<Defaults["confine"]>(io, "6 of 9. Confinement: hold the AI's commands inside the project folder, so they cannot change your other files or read your keys?", [
       { value: true, text: "on (recommended, and what you get if you never choose): a few commands that reach outside the project, such as Docker, are blocked until you add --no-confine for that run" },
       { value: "no-network", text: "on, and no network for the AI's commands either" },
       { value: false, text: "off" },
@@ -186,11 +189,11 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
 
   // 7. Checks after edits.
   io.say("");
-  const checks = await yn(io, `7 of 8. Check its own work: a quick syntax check after each edit, and the project's check before it says it is done${o.projectCheck ? ` (found here: ${o.projectCheck})` : ""}?`, d.checks !== false);
+  const checks = await yn(io, `7 of 9. Check its own work: a quick syntax check after each edit, and the project's check before it says it is done${o.projectCheck ? ` (found here: ${o.projectCheck})` : ""}?`, d.checks !== false);
 
   // 8. Parallel workers.
   io.say("");
-  io.say("8 of 8. Parallel workers: for a job that splits into separate parts, several workers can each change one part at the same time,");
+  io.say("8 of 9. Parallel workers: for a job that splits into separate parts, several workers can each change one part at the same time,");
   io.say("   each in its own copy of the project (it needs to be a git project). It is faster, and it uses your provider limits faster.");
   io.say("   You are asked every time before workers start.");
   let workers = d.parallel_workers ?? DEFAULT_WORKERS;
@@ -201,7 +204,14 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
     io.say(`Please type a whole number from 0 to ${MAX_WORKERS}.`); if (io.ended?.()) break;
   }
 
-  const next: Config = { ...cfg, defaults: { mode, model, web, confine, checks, parallel_workers: workers } };
+  // 9. Memory.
+  io.say("");
+  io.say("9 of 9. Memory across chats: Syok Code can save short notes by itself (how this project is built and tested, what you decided,");
+  io.say("   how you like things done) and read them at the start of later chats. They are plain files in .syok/memory in your home");
+  io.say("   folder on this computer; /memory shows them and removes them. Keys and passwords are never saved.");
+  const memory = await yn(io, "   Keep it on?", d.memory !== false);
+
+  const next: Config = { ...cfg, defaults: { mode, model, web, confine, checks, parallel_workers: workers, memory } };
   if (base) next.base = base; if (key) next.key = key;
   writeConfig(home, next);
   io.say("\nSaved.\n\n" + describeDefaults(next, env, home));

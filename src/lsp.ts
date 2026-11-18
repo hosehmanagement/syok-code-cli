@@ -112,7 +112,7 @@ export class LspClient {
     this.proc = spawn(opts.shell ? `"${exe}"` : exe, args, opts);
     this.proc.stdout!.on("data", (d: Buffer) => this.onData(d)); this.proc.stderr!.on("data", (d) => { this.said = (this.said + d).slice(-500); });
     this.proc.on("error", (e) => this.fail(`the ${this.lang.name} helper could not start: ${e.message}`));
-    this.proc.on("exit", (code) => this.fail(`the ${this.lang.name} helper stopped${code ? ` (code ${code})` : ""}${this.said.trim() ? ": " + this.said.trim().split("\n").slice(-2).join(" ").slice(0, 300) : ""}`));
+    this.proc.on("close", (code) => this.fail(`the ${this.lang.name} helper stopped${code ? ` (code ${code})` : ""}${this.said.trim() ? ": " + this.said.trim().split("\n").slice(-2).join(" ").slice(0, 300) : ""}`));
     this.proc.stdin!.on("error", () => {});
     const rootUri = pathToFileURL(this.root).href;
     const init = await this.request("initialize", { processId: process.pid, rootUri, rootPath: this.root, workspaceFolders: [{ uri: rootUri, name: "project" }], clientInfo: { name: "syok-code" }, ...(this.lang.init ? { initializationOptions: this.lang.init } : {}),
