@@ -59,7 +59,7 @@ grep -q "src/users.js" "$W/rev.txt" && ok "review: the finding names the file" |
 
 echo "=== 4. docs-writer: /readme"
 P="$W/docs"; newrepo "$P"; mkdir -p "$P/src"; printf '{ "name": "tiny-greeter", "version": "1.0.0", "type": "module", "scripts": { "start": "node src/greet.js", "test": "node --test" } }\n' > "$P/package.json"
-printf '// Prints a greeting for the name given on the command line.\nconst name = process.argv[2] || "world";\nconsole.log("Hello, " + name + "!");\n' > "$P/src/greet.js"; commitall "$P"; add "$P" docs-writer
+printf '// Prints a greeting for the name given on the command line.\nconst name = process.argv[2] || "world";\nconsole.log("Hello, " + name + "!");\n' > "$P/src/greet.js"; mkdir -p "$P/test"; printf 'import test from "node:test"; import assert from "node:assert/strict"; import { execFileSync } from "node:child_process";\ntest("greets by name", () => assert.equal(execFileSync("node", ["src/greet.js", "Ada"]).toString().trim(), "Hello, Ada!"));\n' > "$P/test/greet.test.js"; commitall "$P"; add "$P" docs-writer
 run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "/readme" > "$W/docs.txt" 2>&1; tail -5 "$W/docs.txt"
 [ -s "$P/README.md" ] && ok "readme: README.md was written" || bad "readme: no README.md"
 [ "$(changed "$P")" = "README.md " ] && ok "readme: only README.md changed" || bad "readme: changed: $(changed "$P")"

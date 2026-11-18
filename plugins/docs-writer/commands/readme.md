@@ -5,7 +5,7 @@ Write or refresh README.md for this project. $ARGUMENTS
 
 Steps:
 1. Find out what the project is: read the entry points, the package or build file (package.json, pyproject.toml, go.mod, Cargo.toml, Makefile) and a few of the main source files. Read an existing README too: keep what is still true.
-2. Find the real commands: how to install, run, test and build. Take them from the project's own files. Never write a command you did not see there. If you cannot find how to do one of them, leave that part out or say plainly that it is not set up.
+2. Find the real commands: how to install, run, test and build. Take them from the project's own files. A script named in the project's own files IS a real command: every "start", "test", "build" or "dev" entry under "scripts" in package.json (written as `npm start`, `npm test`, `npm run build`), every such target in a Makefile, every script entry in pyproject.toml. Include each one that exists, even if you think it is rarely needed. Never write a command you did not see there. If you cannot find how to do one of them, leave that part out or say plainly that it is not set up.
 3. Write README.md with these parts, in this order, and nothing else unless the project needs it:
    - The name and one or two sentences: what it does and for whom.
    - What you need first (language version, tools), only if the project files state it.

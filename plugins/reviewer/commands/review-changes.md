@@ -20,3 +20,5 @@ Output:
 - Then the findings, most serious first, each marked BUG, SECURITY, TESTS or CLARITY.
 - If you found nothing serious, say so plainly instead of inventing problems.
 Be exact. A finding you are not sure about must say that it is a suspicion and what would confirm it.
+
+Your final answer IS the review. Write every finding out in full in that final answer: do not end with a short note such as "findings below" or "review done", and do not leave the findings only in earlier notes to yourself. Someone who reads nothing but your last message must see each finding, with its mark, its file and line, and its fix.
