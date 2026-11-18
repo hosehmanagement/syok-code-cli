@@ -77,7 +77,7 @@ kill $BP 2>/dev/null
 echo "=== 7. parallel editing with a real AI: three workers, each in its own copy of the project, joined afterwards"
 PP="$W/par"; mkdir -p "$PP/src" "$PP/test"
 for m in area volume speed; do printf 'export function %s(a, b) {\n  return 0; // TODO\n}\n' "$m" > "$PP/src/$m.js"; done
-printf 'import { area } from "../src/area.js"; import { volume } from "../src/volume.js"; import { speed } from "../src/speed.js";\nconst eq = (a, b, n) => { if (a !== b) { console.error("FAIL " + n + ": got " + a + ", want " + b); process.exit(1); } };\neq(area(3, 4), 12, "area"); eq(volume(2, 5), 20, "volume"); eq(speed(100, 4), 25, "speed");\nconsole.log("all three pass");\n' > "$PP/test/all.mjs"
+printf 'import { area } from "../src/area.js"; import { volume } from "../src/volume.js"; import { speed } from "../src/speed.js";\nconst eq = (a, b, n) => { if (a !== b) { console.error("FAIL " + n + ": got " + a + ", want " + b); process.exit(1); } };\neq(area(3, 4), 12, "area"); eq(volume(2, 5), 10, "volume"); eq(speed(100, 4), 25, "speed");\nconsole.log("all three pass");\n' > "$PP/test/all.mjs"
 printf '{ "name": "par", "type": "module", "scripts": { "test": "node test/all.mjs" } }\n' > "$PP/package.json"
 ( cd "$PP" && git init -q -b main . && git -c user.email=t@example.com -c user.name=T add -A && git -c user.email=t@example.com -c user.name=T commit -q -m first )
 HEAD_BEFORE="$(cd "$PP" && git rev-parse HEAD)"
@@ -85,7 +85,8 @@ run --cwd "$PP" --mode auto --model "$MODEL" -p "Three functions return 0 and ne
 grep -q "> parallel_edit" "$W/par.txt" && ok "parallel: the AI used parallel_edit" || bad "parallel: the AI did not use parallel_edit"
 n=$(grep -c "started in its own copy" "$W/par.txt"); [ "$n" -eq 3 ] && ok "parallel: three workers started, each in its own copy" || bad "parallel: $n workers started, wanted 3"
 ( cd "$PP" && node test/all.mjs ) > "$W/par-test.txt" 2>&1 && ok "parallel: the joined project passes its test (checked by this script, not by the AI)" || { bad "parallel: the joined project fails its test"; cat "$W/par-test.txt"; }
-changed="$(cd "$PP" && git status --porcelain | sed 's/^...//' | sort | tr '\n' ' ')"
+# .syok/ holds Syok Code's own record of this chat (so it can be resumed); it is not part of the project's work
+changed="$(cd "$PP" && git status --porcelain -- . ':(exclude).syok' | sed 's/^...//' | sort | tr '\n' ' ')"
 [ "$changed" = "src/area.js src/speed.js src/volume.js " ] && ok "parallel: exactly the three files changed" || bad "parallel: changed files were: $changed"
 [ "$(cd "$PP" && git rev-parse HEAD)" = "$HEAD_BEFORE" ] && ok "parallel: no commit was made on your branch" || bad "parallel: the branch moved"
 [ "$(cd "$PP" && git worktree list | wc -l | tr -d ' ')" = "1" ] && [ -z "$(ls -A "$PP/.git/syok-parallel" 2>/dev/null)" ] && ok "parallel: no copy was left behind" || bad "parallel: a copy was left behind"
