@@ -23,3 +23,4 @@ Finish with:
 - For each real one: it must be replaced at the service that issued it, because removing it from the file does not remove it from git's history.
 - Whether .gitignore protects the files that should be private.
 - If you found nothing, say so plainly.
+- The very last line of your answer, on its own line, exactly in this form: `Findings: N` where N is the number of real findings (placeholders and values read from the environment are not findings). Write `Findings: 0` when there are none.
