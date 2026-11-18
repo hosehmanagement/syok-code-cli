@@ -74,4 +74,20 @@ grep -q "tool server warehouse: 1 tools" "$W/bridge.txt" && ok "bridge: Syok Cod
 has_number 4217 "$W/bridge.txt" && ok "bridge: the answer has the number only the server knows (4217)" || bad "bridge: 4217 not in the answer"
 kill $BP 2>/dev/null
 
+echo "=== 7. parallel editing with a real AI: three workers, each in its own copy of the project, joined afterwards"
+PP="$W/par"; mkdir -p "$PP/src" "$PP/test"
+for m in area volume speed; do printf 'export function %s(a, b) {\n  return 0; // TODO\n}\n' "$m" > "$PP/src/$m.js"; done
+printf 'import { area } from "../src/area.js"; import { volume } from "../src/volume.js"; import { speed } from "../src/speed.js";\nconst eq = (a, b, n) => { if (a !== b) { console.error("FAIL " + n + ": got " + a + ", want " + b); process.exit(1); } };\neq(area(3, 4), 12, "area"); eq(volume(2, 5), 20, "volume"); eq(speed(100, 4), 25, "speed");\nconsole.log("all three pass");\n' > "$PP/test/all.mjs"
+printf '{ "name": "par", "type": "module", "scripts": { "test": "node test/all.mjs" } }\n' > "$PP/package.json"
+( cd "$PP" && git init -q -b main . && git -c user.email=t@example.com -c user.name=T add -A && git -c user.email=t@example.com -c user.name=T commit -q -m first )
+HEAD_BEFORE="$(cd "$PP" && git rev-parse HEAD)"
+run --cwd "$PP" --mode auto --model "$MODEL" -p "Three functions return 0 and need a real body. Use the parallel_edit tool with exactly three tasks, one per file, so three workers do them at the same time: (1) name area: in src/area.js make area(a, b) return a times b. (2) name volume: in src/volume.js make volume(a, b) return a times b. (3) name speed: in src/speed.js make speed(a, b) return a divided by b. Each worker changes only its own file. When they are joined, run npm test yourself and report." > "$W/par.txt" 2>&1; tail -30 "$W/par.txt"
+grep -q "> parallel_edit" "$W/par.txt" && ok "parallel: the AI used parallel_edit" || bad "parallel: the AI did not use parallel_edit"
+n=$(grep -c "started in its own copy" "$W/par.txt"); [ "$n" -eq 3 ] && ok "parallel: three workers started, each in its own copy" || bad "parallel: $n workers started, wanted 3"
+( cd "$PP" && node test/all.mjs ) > "$W/par-test.txt" 2>&1 && ok "parallel: the joined project passes its test (checked by this script, not by the AI)" || { bad "parallel: the joined project fails its test"; cat "$W/par-test.txt"; }
+changed="$(cd "$PP" && git status --porcelain | sed 's/^...//' | sort | tr '\n' ' ')"
+[ "$changed" = "src/area.js src/speed.js src/volume.js " ] && ok "parallel: exactly the three files changed" || bad "parallel: changed files were: $changed"
+[ "$(cd "$PP" && git rev-parse HEAD)" = "$HEAD_BEFORE" ] && ok "parallel: no commit was made on your branch" || bad "parallel: the branch moved"
+[ "$(cd "$PP" && git worktree list | wc -l | tr -d ' ')" = "1" ] && [ -z "$(ls -A "$PP/.git/syok-parallel" 2>/dev/null)" ] && ok "parallel: no copy was left behind" || bad "parallel: a copy was left behind"
+
 echo; if [ $fails -eq 0 ]; then echo "All live checks passed."; else echo "$fails live check(s) FAILED"; exit 1; fi

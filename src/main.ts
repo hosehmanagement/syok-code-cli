@@ -23,6 +23,7 @@ import { reviewTask, openPr, realRun } from "./pr.ts";
 import { sandboxCall, sandboxExec, sandboxPut } from "./sandbox.ts";
 import { runJobRunner, describeJobs, jobLog, stopJob } from "./jobs.ts";
 import { selfUpdate, sha256 } from "./update.ts";
+import { cleanupParallel } from "./parallel.ts";
 
 function arg(n: string, d = "") { const i = process.argv.indexOf(n); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; }
 const has = (n: string) => process.argv.includes(n);
@@ -66,7 +67,7 @@ Usage: after each task you see tokens in and out and which provider answered; /u
 GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
   syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
 Checking your setup:
-  syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks
+  syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks, parallel workers
   syok setup --show | --reset                  see your saved choices | forget them (address and key stay)
   syok doctor                                  check the address, the key, a real AI answer and the programs Syok Code uses
 Updating:
@@ -109,6 +110,9 @@ Options:
                         auto = run everything except blocked commands
   --profile <name>      tuning profile from profiles.json
   --max-steps <n>       stop after n steps
+  --workers <n>         parallel editing: how many workers may change the project at once, each in its own copy (default 2, at most 8, 0 = off).
+                        Needs a git project. You are asked before they start; their changes are joined into your folder and /undo takes them back.
+                        "parallel_workers": 3 in .syok/settings.json makes it the default
   --general             general terminal mode: not only programming (scripts, data, system tasks, automation)
   --timeout <sec>       default time limit for one command (default 120)
   --max-timeout <sec>   the most one command may run (default 600, up to 86400); longer work belongs in a saved job
@@ -249,11 +253,12 @@ const ask = async (what: string, detail: string) => {
 const log = (s: string) => { if (!JSON_OUT) console.log(s); };
 const ctx = makeCtx(root, mode, ask, settings, profile);
 if (settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, root, (s) => console.error(s));
-const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); };
+const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); cleanupParallel(); };
 process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exit(130); });
 const onToken = !JSON_OUT && !has("--no-stream") ? (s: string) => process.stdout.write(s) : undefined;
 ctx.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
 if (has("--no-web")) settings.web = false;
+if (arg("--workers")) settings.parallel_workers = Math.floor(+arg("--workers")) || 0;
 if (has("--no-checks")) settings.checks = false;
 // What this whole session used (every task, skill and helper added up); shown by /usage and after each task.
 const sessionUsage = emptyUsage();

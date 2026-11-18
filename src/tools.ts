@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { workerLimit, isGitProject } from "./parallel.ts";
 import { resolve, relative, dirname, join, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { spawnCommand, killTree, cleanEnv } from "./shell.ts";
@@ -42,6 +43,7 @@ export const TOOLS = [
   fn("web_search", "Search the web. Returns a numbered list of titles, addresses and short snippets. Use it for current facts, documentation, error messages and library versions you are not sure about; then read the best page with web_fetch.", { query: { type: "string" }, max_results: { type: "integer" } }, ["query"]),
   fn("web_fetch", "Read one web page (http or https) as plain text. Long pages come in parts: the reply says which characters are shown and the start value for the next part. Never put secrets or the user's private data in the address.", { url: { type: "string" }, start: { type: "integer" }, max_chars: { type: "integer" } }, ["url"]),
   fn("delegate", "Hand a sub-task to a helper with a fresh, empty context so it does not fill your memory. role 'explorer' (default) is read-only: use it to search or read a lot and get a short answer; several explorers in one message run in parallel. role 'worker' may edit files and run commands; use it for one self-contained change. Give a complete, specific task.", { task: { type: "string" }, role: { type: "string", description: "explorer, worker, or the name of one of the user's helpers" } }, ["task"]),
+  fn("parallel_edit", "Run two or more workers AT THE SAME TIME, each making one change in its own separate copy of the project; afterwards their changes are joined into the real project. Use it when a job splits into independent changes that touch DIFFERENT files (for example: three modules that each need the same kind of update, or a feature plus its documentation). Do not use it for changes to the same file or for steps that depend on each other: do those yourself, in order. Each worker starts with an empty memory, so every task must be complete on its own: what to change, in which files, and how to check it. A worker whose change overlaps with another's is not joined, and you are told so you can redo it. After it returns, run the project's tests on the joined result.", { tasks: { type: "array", description: "two to eight tasks", items: { type: "object", properties: { name: { type: "string", description: "a short name, for example api or docs" }, task: { type: "string", description: "complete, specific instructions" } }, required: ["name", "task"] } } }, ["tasks"]),
   fn("finish", "Call when the task is done (or cannot be done). Give a short plain summary.", { summary: { type: "string" } }, ["summary"]),
 ];
 
@@ -52,6 +54,7 @@ export function toolDefs(c: Ctx): any[] {
   if (c.depth > 0) t = t.filter((x) => x.function.name !== "delegate");
   else if (c.agents?.length) t = t.map((x) => x.function.name === "delegate" ? { ...x, function: { ...x.function, description: x.function.description + agentsHint(c.agents!) } } : x);
   if (c.settings.web === false) t = t.filter((x) => !WEB_TOOLS.has(x.function.name));
+  if (c.depth > 0 || c.mode === "plan" || workerLimit(c.settings) < 1 || !isGitProject(c.root)) t = t.filter((x) => x.function.name !== "parallel_edit");
   return c.allowed ? t : [...t, ...c.mcp.flatMap((m) => m.defs())];
 }
 /** Everything changed in this session, as a unified diff (for /diff). */
@@ -247,6 +250,7 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
         return await webFetch({ url: a.url, start: a.start, max_chars: Math.min(a.max_chars || 12000, c.profile.maxToolChars || 12000) }, c.web || {}, chk);
       }
       case "delegate": return "Error: delegate only works in the main agent loop.";
+      case "parallel_edit": return "Error: parallel_edit only works in the main agent loop.";
       default: return `Error: unknown tool ${name}.`;
     }
   } catch (e: any) { return "Error: " + (e?.message || e); }

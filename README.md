@@ -11,8 +11,8 @@ Status: early (v0.12). Built for computers that are fast and stable.
 
    Everything goes into the `.syok` folder in your home folder: a private copy of the Bun runtime, the one-file program and the `syok` command. Both downloads are checked against their published checksums. Run the same line again, or `syok update`, to get the newest version.
 2. In Syok AI open **Developer API**, make a key (starts with `syk_`) and note your Syok address.
-3. Run `syok setup`. It asks seven short questions, once: your address, your key (hidden while you type), how much it should ask before acting, which model preset, web access, confinement, and checks after edits. It then tests that everything works. Your answers are saved in `.syok/config.json` in your home folder, readable by you alone. `syok setup --show` shows them; `syok setup --reset` forgets the choices and keeps the address and key.
-   - A flag on the command line wins over these choices, and so does a project's `.syok/settings.json`, with two exceptions: a project cannot switch off your confinement or switch web access back on.
+3. Run `syok setup`. It asks eight short questions, once: your address, your key (hidden while you type), how much it should ask before acting, which model preset, web access, confinement, checks after edits, and how many parallel workers. It then tests that everything works. Your answers are saved in `.syok/config.json` in your home folder, readable by you alone. `syok setup --show` shows them; `syok setup --reset` forgets the choices and keeps the address and key.
+   - A flag on the command line wins over these choices, and so does a project's `.syok/settings.json`, with two exceptions: a project cannot switch off your confinement, switch web access back on, or raise your number of parallel workers.
    - Without setup, this still works: `SYOK_BASE_URL=https://your-address SYOK_API_KEY=syk_... syok` (Windows PowerShell: `$env:SYOK_BASE_URL="https://your-address"; $env:SYOK_API_KEY="syk_..."; syok`).
    Then run `syok` in your project folder.
 4. Type what you want. Examples: `fix the failing test`, `add a --verbose flag`.
@@ -67,6 +67,11 @@ The folder `vscode/` holds a small VS Code extension. It adds "Syok Code" comman
 The workflow "cli-anything live test" does exactly this with a real AI and checks the PDF it made.
 
 ## New in 0.14
+- **Parallel editing**: when a job splits into separate parts in different files, the AI can run a worker for each part at the same time, each in its own copy of the project, and join the results into your folder. It needs a git project. You are asked before the workers start (not in `--mode auto`). Up to 2 run at once by default: `--workers 4`, or `"parallel_workers": 4` in `.syok/settings.json`, changes that (0 switches it off, 8 is the most), and `syok setup` asks for your everyday number.
+  - Your branch, your commits and your staging area are not touched: the joined changes arrive as ordinary edited files, and `/undo` takes them back.
+  - If two workers changed the same lines, the first is joined and the second is not applied at all; the AI is told and redoes that part on top.
+  - Each worker uses your Syok key at the same time, so provider limits are reached sooner.
+  - The copies live inside the project's `.git` folder while the workers run and are removed afterwards. Files that git ignores are not copied; `node_modules`, `.venv` and `venv` are linked so tests can run.
 - **`syok doctor`**: checks your address, your key (never shown), a real AI answer, and the programs Syok Code uses. Each problem comes with what to do.
 - **Your own helpers**: a file `.syok/agents/reviewer.md` with a few lines of instructions makes a helper the AI can hand work to. `tools: read, search` makes it read-only. Files written for Claude Code (`.claude/agents/`) and GitHub Copilot (`.github/agents/*.agent.md`) are used as they are. `syok agents` lists them.
 - **Hosted tool servers**: in `.syok/settings.json`, `"mcpServers": { "name": { "url": "https://...", "headers": { "Authorization": "Bearer ${MY_KEY}" } } }`. `${MY_KEY}` is read from your environment, so the key is not written in the file. Syok's own keys are never handed to a tool server.

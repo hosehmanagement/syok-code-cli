@@ -93,4 +93,4 @@ esac
 say ""
 say "Syok Code is installed: $BIN/syok"
 if [ -n "$added" ]; then say "Open a new terminal window (or run: export PATH=\"$BIN:\$PATH\") so the 'syok' command is found."; fi
-say "Next: set your Syok address and key, then run 'syok' in a project folder. See: syok --help"
+say "Next: run 'syok setup' (a few questions, asked once), then 'syok' in a project folder. See: syok --help"

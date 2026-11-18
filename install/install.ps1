@@ -78,7 +78,7 @@ try {
   Write-Host ''
   Write-Host "Syok Code is installed: $(Join-Path $Bin 'syok.cmd')"
   if ($added) { Write-Host "New terminal windows will find the 'syok' command. This window can use it now." }
-  Write-Host "Next: set your Syok address and key, then run 'syok' in a project folder. See: syok --help"
+  Write-Host "Next: run 'syok setup' (a few questions, asked once), then 'syok' in a project folder. See: syok --help"
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
