@@ -1,0 +1,17 @@
+name: exp-win-low
+on:
+  push:
+    branches: ['exp/win-low']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: bun install --frozen-lockfile
+      - run: bun test test/confine-win.test.ts test/mcp-auth.test.ts test/memory.test.ts test/lsp.test.ts test/setup.test.ts test/parallel.test.ts test/confine.test.ts test/shell.test.ts
