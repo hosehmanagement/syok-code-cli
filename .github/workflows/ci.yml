@@ -176,3 +176,29 @@ jobs:
         with:
           name: syok-code-vscode
           path: vscode/syok-code.vsix
+
+  # The JetBrains add-on: its own tests, the installable zip, and JetBrains' checker run against real editors.
+  jetbrains:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: current }
+      - name: Tests and the installable zip
+        working-directory: jetbrains
+        run: gradle --no-daemon test buildPlugin
+      - name: The zip holds the add-on
+        working-directory: jetbrains
+        run: |
+          ls -la build/distributions
+          unzip -l build/distributions/*.zip | grep -q "syok-code-jetbrains.*\.jar"
+      - name: JetBrains' own checker, against real editors
+        working-directory: jetbrains
+        run: gradle --no-daemon verifyPlugin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: syok-code-jetbrains
+          path: jetbrains/build/distributions/*.zip
