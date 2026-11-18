@@ -35,6 +35,8 @@ export interface Settings { allow?: string[]; deny?: string[];
   lsp?: false | Record<string, { command: string; args?: string[] } | false>;
   /** Parallel editing: how many workers may change the project at the same time, each in its own copy (default 2, at most 8). 0 or false switches it off. */
   parallel_workers?: number | boolean;
+  /** The usage history in ~/.syok/usage (token counts per AI call, never the text): false switches it off. */
+  usage_log?: boolean;
   /** Custom helpers (.syok/agents and the files of other tools): false switches them off. */
   agents?: boolean;
   /** run_command: default seconds (120) and the most the AI may ask for (600). Hard ceiling 24 hours. */

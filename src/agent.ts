@@ -1,3 +1,4 @@
+import { recordCall } from "./usage.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { memoryPrompt, memoryDir } from "./memory.ts";
 import { runParallel, describeParallel, requestProblem, cleanNames, workerLimit } from "./parallel.ts";
@@ -300,6 +301,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     tokens += res.usage?.total_tokens || 0;
     if (res.__route) routes.push(res.__route);
     addUsage(usage, res.usage, res.__route);
+    recordCall(res.usage, res.__route, model); // the usage history ("syok usage"); token counts only
     // Say so when a different provider answers than the step before: this is Syok switching for you.
     const prov = res.__route?.provider || "";
     if (prov && ctx.depth === 0) { if (lastProvider && prov !== lastProvider) log(`(switched provider: ${lastProvider} -> ${prov}${res.__route.attempts && res.__route.attempts !== "1" ? ", after " + res.__route.attempts + " attempts" : ""})`); lastProvider = prov; }
