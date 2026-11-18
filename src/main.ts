@@ -92,6 +92,9 @@ Your own helpers (custom agents):
   files made for Claude Code (.claude/agents) and GitHub Copilot (.github/agents/*.agent.md) are used as they are
 Your own commands and plugins:
   .syok/commands/<name>.md becomes /<name> ($ARGUMENTS = what you type after it); syok commands lists them
+  syok plugin browse [word]                    the Syok plugin list, with the ones that fit this project first and why
+  syok plugin find "what you need"             say it in your own words; the AI picks from the list
+  syok plugin add <name>                       install one from the list (checked against its reviewed fingerprint)
   syok plugin add <owner/repo|folder> | list | remove <name>      bundles of skills, commands and hooks
 GitHub:
   syok review <pull request number or link> [--comment]   read-only review of a pull request (needs the gh program)
@@ -137,9 +140,30 @@ Extras (in <project>/.syok/settings.json):
 The AI can also delegate to helper agents (read-only explorers run in parallel) and run background jobs (dev servers).`;
 if (has("--help") || has("-h")) { console.log(HELP); process.exit(0); }
 if (["plugin", "plugins", "sessions", "commands"].includes(process.argv[2] ?? "")) {
-  const here = resolve(arg("--cwd", process.cwd())); const sub0 = process.argv[2]; const a = process.argv.slice(3).filter((x) => !x.startsWith("--"));
+  const here = resolve(arg("--cwd", process.cwd())); const sub0 = process.argv[2]; const a = process.argv.slice(3).filter((x, i, all) => !x.startsWith("--") && !["--cwd", "--model"].includes(all[i - 1] ?? ""));
   if (sub0 === "sessions") console.log(describeSessions(here));
   else if (sub0 === "commands") console.log(describeCommands(loadCommands(here)));
+  else if (a[0] === "browse" || a[0] === "find") {
+    // The curated list on syok-ai.com: matched to this project (browse), or to what you say you need (find).
+    const L = await import("./plugin-list.ts");
+    try {
+      const { index, note } = await L.loadIndex(); const facts = L.projectFacts(here), inst = L.installedVersions(here);
+      if (a[0] === "browse") console.log(L.describeBrowse(L.rank(index, facts, inst, a.slice(1).join(" ")), a.slice(1).join(" "), note));
+      else {
+        const need = a.slice(1).join(" ").trim(); if (!need) { console.error('Say what you need, in your own words:  syok plugin find "write tests for my code"'); process.exit(2); }
+        const S = await import("./setup.ts"); const c = S.readConfig(); const b = process.env.SYOK_BASE_URL || String(c.base || ""), k = process.env.SYOK_API_KEY || String(c.key || "");
+        const { askModel } = await import("./agent.ts");
+        const r = await L.findPlugins(index, need, facts, b && k ? { ask: (p) => askModel(b, k, arg("--model", S.cleanDefaults(c.defaults).model || "syok-coder"), p) } : {});
+        console.log(L.describeFind(index, need, r, inst) + (note ? "\n" + note : ""));
+      }
+    } catch (e: any) { console.error(e.message); process.exit(1); }
+  }
+  else if (a[0] === "add" && /^[a-z0-9][a-z0-9-]*$/.test(a[1] || "") && !existsSync(resolve(a[1]))) {
+    // A plain name: from the curated list. (owner/repo and folders go the other way, below.)
+    const L = await import("./plugin-list.ts");
+    const r = await L.installFromList(here, a[1], { confirm: process.stdin.isTTY ? async (q) => { const rl2 = (await import("node:readline")).createInterface({ input: process.stdin, output: process.stdout }); const ans = await new Promise<string>((ok) => rl2.question(q + " [y/N] ", ok)); rl2.close(); return /^y(es)?$/i.test(ans.trim()); } : undefined });
+    console.log(r.message); process.exit(r.ok ? 0 : 2);
+  }
   else if (a[0] === "add") { const r = await addPlugin(here, a[1] || ""); console.log(r.message); process.exit(r.ok ? 0 : 2); }
   else if (a[0] === "remove") console.log(removePlugin(here, a[1] || "") ? "Removed." : "No such plugin in this project.");
   else console.log(describePlugins(listPlugins(here)));
@@ -433,6 +457,10 @@ if (KINDS.includes(sub)) {
   prompt = b.task; readOnlyRun = b.readOnly;
 }
 if (prompt === "-" || (!prompt && !rl && !KINDS.includes(sub))) prompt = await readStdin();
+{ // a one-off task may be one of your own commands, exactly as in the chat:  syok -p "/commit"
+  const m = /^\/([\w-]+)(?:\s+([\s\S]*))?$/.exec((prompt || "").trim()); const own = m ? loadCommands(root).get(m[1].toLowerCase()) : undefined;
+  if (m && own) prompt = renderCommand(own, (m[2] || "").trim());
+}
 if (prompt) {
   if (readOnlyRun) ctx.allowed = READONLY;
   const im = extractImages(root, prompt); im.notes.forEach((n) => console.error("(" + n + ")"));

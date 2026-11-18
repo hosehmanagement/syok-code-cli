@@ -18,6 +18,10 @@ jobs:
           bun build src/main.ts --target=bun --minify --outfile out/syok.js
           bun out/syok.js --help | head -n 5
           (cd out && sha256sum syok.js > syok.js.sha256 && cat syok.js.sha256)
+      - name: Build the plugin list
+        run: |
+          bun scripts/build-plugins.ts out/plugins
+          ls -la out/plugins && head -c 600 out/plugins/index.json
       # The JetBrains add-on is built here too, so the published copy always comes from the merged code.
       # If this part fails, the program itself is still published; the add-on is then simply missing from this build.
       - uses: actions/setup-java@v4
@@ -35,7 +39,7 @@ jobs:
           cd out
           git init -q
           git checkout -q -b dist
-          git add syok.js syok.js.sha256
+          git add syok.js syok.js.sha256 plugins
           if [ -f syok-code-jetbrains.zip ]; then git add syok-code-jetbrains.zip; fi
           git -c user.name=syok-ci -c user.email=ci@syok-ai.com commit -q -m "bundle ${GITHUB_SHA}"
           git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" dist

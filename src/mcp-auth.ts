@@ -237,7 +237,7 @@ export async function passFor(server: string, deps: AuthDeps & { clientSecret?: 
 }
 /** One line per hosted server: signed in or not. Nothing secret is shown. */
 export function describeLogins(servers: Record<string, { url?: string; headers?: Record<string, string> }> | undefined, home = homedir(), now = Date.now()): string {
-  const hosted = Object.entries(servers || {}).filter(([, c]) => c?.url); if (!hosted.length) return "No hosted tool servers are set up. Add one under \"mcp\" in .syok/settings.json with a \"url\".";
+  const hosted = Object.entries(servers || {}).filter(([, c]) => c?.url); if (!hosted.length) return "No hosted tool servers are set up. Add one under \"mcpServers\" in .syok/settings.json with a \"url\".";
   const s = readStore(home); const L = ["Hosted tool servers:"];
   for (const [name, c] of hosted) {
     let k = ""; try { k = canonical(c.url!); } catch {}

@@ -1,0 +1,4 @@
+{ "name": "git-helper", "title": "Git helper", "version": "1.0.0",
+  "description": "Commit with a clear message written from your real changes, and keep a changelog, without typing git commands.",
+  "tags": ["git", "commit", "changelog", "history", "message"], "try": "/commit",
+  "fits": [{ "file": ".git", "because": "this project uses git" }] }

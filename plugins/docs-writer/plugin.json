@@ -1,0 +1,4 @@
+{ "name": "docs-writer", "title": "Docs writer", "version": "1.0.0",
+  "description": "Writes a README from what the project really does, with commands it has checked, and explains any file in plain words.",
+  "tags": ["docs", "readme", "documentation", "explain", "comments", "onboarding"], "try": "/readme",
+  "fits": [{ "missing": "README.md", "because": "this project has no README yet" }, { "file": "package.json", "because": "it can read the real commands from package.json" }, { "file": "pyproject.toml", "because": "it can read the real commands from pyproject.toml" }] }

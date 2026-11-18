@@ -1,0 +1,4 @@
+{ "name": "test-writer", "title": "Test writer", "version": "1.0.0",
+  "description": "Writes tests for a file the way your project already writes them, runs them, and never changes the code under test to make them pass.",
+  "tags": ["test", "tests", "testing", "unit", "coverage", "pytest", "jest"], "try": "/tests src/yourfile",
+  "fits": [{ "file": "package.json", "because": "this is a JavaScript or TypeScript project" }, { "file": "pyproject.toml", "because": "this is a Python project" }, { "file": "go.mod", "because": "this is a Go project" }, { "file": "Cargo.toml", "because": "this is a Rust project" }] }
