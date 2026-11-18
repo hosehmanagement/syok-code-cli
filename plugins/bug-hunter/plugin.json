@@ -1,0 +1,4 @@
+{ "name": "bug-hunter", "title": "Bug hunter", "version": "1.0.0",
+  "description": "Runs your tests, finds the real cause of each failure and fixes the code, not the test. Says so when the test itself is wrong.",
+  "tags": ["bug", "fix", "failing", "tests", "debug", "error", "broken"], "try": "/fix-failing",
+  "fits": [{ "file": "package.json", "because": "it can run this project's tests" }, { "file": "pyproject.toml", "because": "it can run this project's tests" }, { "file": "pytest.ini", "because": "it can run this project's tests" }, { "file": "go.mod", "because": "it can run this project's tests" }, { "file": "Cargo.toml", "because": "it can run this project's tests" }] }

@@ -1,0 +1,4 @@
+{ "name": "reviewer", "title": "Change reviewer", "version": "1.0.0",
+  "description": "Reviews the changes you have not committed yet: real bugs first, then security, then missing tests. Reads only; changes nothing.",
+  "tags": ["review", "bugs", "quality", "diff", "check", "security"], "try": "/review-changes",
+  "fits": [{ "file": ".git", "because": "this project uses git, so your uncommitted changes can be reviewed" }] }

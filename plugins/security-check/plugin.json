@@ -1,0 +1,26 @@
+{
+ "name": "security-check",
+ "title": "Security check",
+ "version": "1.0.0",
+ "description": "Looks through the project for keys, passwords and tokens left in its files and reports where each one is, without ever printing a secret.",
+ "tags": [
+  "security",
+  "secrets",
+  "keys",
+  "passwords",
+  "leak",
+  "audit",
+  "safety"
+ ],
+ "try": "/secrets-scan",
+ "fits": [
+  {
+   "file": ".git",
+   "because": "anything committed to git stays in its history, so leaked keys are worth finding early"
+  },
+  {
+   "file": ".env",
+   "because": "this project has a .env file, which often holds keys"
+  }
+ ]
+}

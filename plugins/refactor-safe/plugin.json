@@ -1,0 +1,4 @@
+{ "name": "refactor-safe", "title": "Safe refactor", "version": "1.0.0",
+  "description": "Renames a function, class or variable everywhere it is really used, and nowhere else, then runs the tests to prove nothing broke.",
+  "tags": ["refactor", "rename", "cleanup", "restructure", "symbol"], "try": "/rename oldName newName",
+  "fits": [{ "lang": "typescript", "because": "this project is written in TypeScript or JavaScript" }, { "lang": "python", "because": "this project is written in Python" }, { "lang": "go", "because": "this project is written in Go" }, { "lang": "rust", "because": "this project is written in Rust" }] }

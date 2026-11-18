@@ -1,0 +1,4 @@
+{ "name": "ci-starter", "title": "CI starter", "version": "1.0.0",
+  "description": "Sets up automatic checks on GitHub that run your project's real test command on every push and pull request.",
+  "tags": ["ci", "github", "actions", "workflow", "automation", "checks", "pipeline"], "try": "/ci",
+  "fits": [{ "missing": ".github/workflows", "because": "this project has no automatic checks on GitHub yet" }, { "file": ".git", "because": "this project uses git" }] }

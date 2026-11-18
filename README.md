@@ -183,7 +183,7 @@ Interactive terminals (programs that wait for typed input), syncing the skills y
 - **Checkpoints**: one is saved before each message. `/checkpoints`, `/rewind 3` puts every file and the chat back.
 - **Instructions**: SYOK.md, AGENTS.md, CLAUDE.md, .claude/CLAUDE.md and ~/.syok/SYOK.md are all read. `/init` writes SYOK.md for you.
 - **Your own commands**: .syok/commands/name.md becomes /name (`$ARGUMENTS` = what you type after it).
-- **Plugins**: `syok plugin add owner/repo` installs a bundle of skills, commands and hooks.
+- **Plugins**: `syok plugin browse` shows the Syok plugin list with the ones that fit this project first, and says why. `syok plugin find "my tests fail"` lets the AI pick from the list for what you describe. `syok plugin add git-helper` installs one by name; it is checked against the fingerprint of the reviewed copy before anything is written. The eight on the list (git-helper, test-writer, reviewer, docs-writer, bug-hunter, ci-starter, refactor-safe, security-check) hold instructions only: no hooks, no tool servers, nothing that runs on its own. `syok plugin add owner/repo` still installs any bundle from GitHub.
 - **Pictures**: write @screenshot.png in a message, or `/image shot.png what is wrong?`.
 - **GitHub**: `syok review 12` reviews a pull request (read-only); `syok pr "title"` commits to a branch and opens a pull request after you approve.
 - **Scripts and CI**: `echo "task" | syok -p - --json`.
