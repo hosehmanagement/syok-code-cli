@@ -52,7 +52,7 @@ export function findServer(lang: Lang, root: string, setting: LspSetting): { exe
   if (own === false) return null;
   if (own && typeof own.command === "string" && own.command) { const exe = which(own.command) || (existsSync(resolve(root, own.command)) ? resolve(root, own.command) : ""); return exe ? { exe, args: Array.isArray(own.args) ? own.args.map(String) : [], from: "your settings" } : null; }
   for (const s of lang.servers) {
-    const local = join(root, "node_modules", ".bin", s.command + (process.platform === "win32" ? ".cmd" : "")); if (existsSync(local)) return { exe: local, args: s.args || [], from: "this project" };
+    const local = (process.platform === "win32" ? [".cmd", ".exe", ".bat"] : [""]).map((ext) => join(root, "node_modules", ".bin", s.command + ext)).find((p) => existsSync(p)); if (local) return { exe: local, args: s.args || [], from: "this project" };
     const exe = which(s.command); if (exe) return { exe, args: s.args || [], from: "this computer" };
   }
   return null;

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { planWindows, prepareWindows, winSpawn, undoWindows, markedFolders, type WinPlan } from "../src/confine-win.ts";
 import { planConfine, setConfine, describeConfine, confineHint } from "../src/confine.ts";
-import { spawnCommand, pickShell, realEnv, type Shell } from "../src/shell.ts";
+import { spawnCommand, pickShell, realEnv, currentShell, shellUnderWindowsConfinement, type Shell } from "../src/shell.ts";
 import { call } from "./helpers.ts";
 
 const H = "C:\\Users\\me";
@@ -26,7 +26,7 @@ test("the plan: where things go, and what is refused", () => {
   expect(describeConfine(c as any)).toContain("can still READ other files"); expect(describeConfine(c as any)).toContain("syok confine undo"); expect(confineHint(c as any)).toContain("Access is denied");
 });
 
-test("the command line for each shell: nothing of the AI's command is handed to the Command Prompt except in Command Prompt itself", () => {
+test("the command line for each shell: nothing of the AI's command is handed to the Command Prompt except in Command Prompt itself; Git Bash is never started confined", () => {
   const c = planWindows({ root: "D:\\work\\proj", home: H }) as WinPlan; const files: Record<string, string> = {}; const w = (p: string, t: string) => { files[p] = t; };
   const nasty = `echo "a & b" | findstr %PATH% ^ > out.txt; $x = 'q"q'`;
   const cmd = winSpawn(c, { kind: "cmd", exe: "C:\\Windows\\System32\\cmd.exe" } as Shell, nasty, "", w);
@@ -36,9 +36,7 @@ test("the command line for each shell: nothing of the AI's command is handed to 
   expect(ps.exe).toBe(c.low.cmd); expect(ps.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
   expect(ps.args[3]).toBe(`""C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -NonInteractive -Command "Invoke-Expression ([IO.File]::ReadAllText('${psFile}'))""`);
   expect(ps.args[3]).not.toContain("findstr"); expect(ps.args[3]).not.toContain("%PATH%");
-  const sh = winSpawn(c, { kind: "bash", exe: "C:\\Program Files\\Git\\bin\\bash.exe" } as Shell, nasty, "", w);
-  const shFile = Object.keys(files)[1]; expect(shFile).toMatch(/cmd-[0-9a-f]{16}\.sh$/); expect(files[shFile]).toBe(nasty + "\n");
-  expect(sh.args[3]).toBe(`""C:\\Program Files\\Git\\bin\\bash.exe" -l "${shFile}""`); expect(sh.args[3]).not.toContain("findstr");
+  expect(() => winSpawn(c, { kind: "bash", exe: "C:\\Program Files\\Git\\bin\\bash.exe" } as Shell, nasty, "", w)).toThrow("Git Bash cannot be used under Windows confinement"); expect(Object.keys(files).length).toBe(1);
   const apostrophe = winSpawn(planWindows({ root: "D:\\p", home: "C:\\Users\\O'Brien" }) as WinPlan, { kind: "powershell", exe: "ps.exe" } as Shell, "x", "", w);
   expect(apostrophe.args[3]).toContain("O''Brien"); // a quote in the folder name cannot end the text early
 });
@@ -66,8 +64,8 @@ onWin("real: it can be set up on this computer, and the folder is remembered as 
   expect(shells().map((s) => s.kind)).toContain("cmd"); expect(shells().map((s) => s.kind)).toContain("powershell");
 });
 
-onWin("real: in every shell, a confined command works in the project and cannot change anything outside it", async () => {
-  for (const sh of shells()) {
+onWin("real: in Command Prompt and PowerShell, a confined command works in the project and cannot change anything outside it", async () => {
+  for (const sh of shells().filter((x) => x.kind !== "bash")) {
     const k = sh.kind; const P = k === "bash" ? proj.replace(/\\/g, "/") : proj, O = k === "bash" ? outside.replace(/\\/g, "/") : outside;
     const write = (dir: string, name: string) => k === "powershell" ? `Set-Content -Path '${dir}\\${name}' -Value 'made-by-${k}'` : k === "bash" ? `echo made-by-${k} > '${dir}/${name}'` : `echo made-by-${k}> "${dir}\\${name}"`;
     const a = await run(write(P, `in-${k}.txt`), sh); expect(readFileSync(join(proj, `in-${k}.txt`), "utf8").trim()).toBe(`made-by-${k}`); expect(a.code).toBe(0);
@@ -84,7 +82,7 @@ onWin("real: in every shell, a confined command works in the project and cannot 
 });
 
 onWin("real: the command arrives exactly as written (quotes, &, |, %, $), its output and its exit code come back", async () => {
-  for (const sh of shells()) {
+  for (const sh of shells().filter((x) => x.kind !== "bash")) {
     if (sh.kind === "cmd") { const r = await run(`echo one^&two & echo %SYOK_CONFINED% & exit /b 7`, sh); expect(r.out).toContain("one&two"); expect(r.out).toContain("1"); expect(r.code).toBe(7); continue; }
     if (sh.kind === "powershell") {
       const r = await run(`$x = 'a & b | c % d "q"'; Write-Output $x; Write-Output ("conf=" + $env:SYOK_CONFINED); Write-Output ("tmp=" + $env:TEMP); cmd /c exit 5`, sh);
@@ -125,4 +123,18 @@ onWin("real, whole program: syok --confine on Windows holds the AI's command; wi
     const plain = await go([]); expect(plain.err).not.toContain("Confined"); expect(plain.err).not.toContain("NOT confined"); expect(existsSync(join(outside, "whole-escape.txt"))).toBe(true);
     const net = await go(["--confine-no-network"]); expect(net.code).toBe(2); expect(net.err).toContain("not available on Windows itself");
   } finally { server.stop(true); }
+});
+
+// Git Bash refuses to start at the low level while another Git Bash program is running at the normal level, which on a
+// developer's computer is most of the time. So a confined command never goes to Git Bash, whatever shell was picked.
+onWin("real: with Git Bash as the shell, confined commands run in PowerShell instead, and work while another Git Bash is open", async () => {
+  const bash = shells().find((s) => s.kind === "bash"); if (!bash) { console.log("  (Git Bash is not on this computer)"); return; }
+  expect(shellUnderWindowsConfinement(bash).kind).toBe("powershell");
+  const other = spawn(bash.exe, ["-lc", "sleep 20"], { stdio: "ignore" }); await new Promise((ok) => setTimeout(ok, 1500)); // an ordinary Git Bash, open in the background
+  try {
+    const r = await run(`Set-Content -Path 'via-bash-shell.txt' -Value 'ok'; Write-Output ("shell=" + $PSVersionTable.PSVersion.Major)`, bash);
+    expect(r.out).toMatch(/shell=\d/); expect(r.code).toBe(0); expect(existsSync(join(proj, "via-bash-shell.txt"))).toBe(true);
+    const esc = await run(`Set-Content -Path '${outside}\\via-bash-escape.txt' -Value 'x'`, bash); expect(existsSync(join(outside, "via-bash-escape.txt"))).toBe(false); expect(esc.code).not.toBe(0);
+    setConfine(plan as any); expect(currentShell().kind).not.toBe("bash"); setConfine(null); // and the AI is told the shell it really gets
+  } finally { try { other.kill(); } catch {} }
 });

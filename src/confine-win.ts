@@ -90,6 +90,6 @@ export function winSpawn(c: WinPlan, sh: Shell, command: string, psTail = "", wr
     const inner = `Invoke-Expression ([IO.File]::ReadAllText('${file.replace(/'/g, "''")}'))`;
     return { exe: c.low.cmd, args: ["/d", "/s", "/c", `""${sh.exe}" -NoLogo -NoProfile -NonInteractive -Command "${inner}""`], verbatim: true, env: c.low.env, cleanup: () => { try { unlinkSync(file); } catch {} } };
   }
-  const file = join(c.low.tmp, `cmd-${id}.sh`); write(file, command + "\n");
-  return { exe: c.low.cmd, args: ["/d", "/s", "/c", `""${sh.exe}" -l "${file}""`], verbatim: true, env: c.low.env, cleanup: () => { try { unlinkSync(file); } catch {} } };
+  // Git Bash is never started at the low level (see shellUnderWindowsConfinement in shell.ts): the caller has replaced it before this point.
+  throw new Error("Git Bash cannot be used under Windows confinement.");
 }

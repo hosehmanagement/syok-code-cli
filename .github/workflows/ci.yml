@@ -22,7 +22,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - name: Windows tests (must pass)
-        run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts test/bridge.test.ts test/doctor.test.ts test/agents.test.ts test/mcp-http.test.ts test/symbols.test.ts test/cloud.test.ts test/confine.test.ts
+        run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts test/bridge.test.ts test/doctor.test.ts test/agents.test.ts test/mcp-http.test.ts test/symbols.test.ts test/cloud.test.ts test/confine.test.ts test/confine-win.test.ts test/mcp-auth.test.ts test/memory.test.ts test/lsp.test.ts test/setup.test.ts test/parallel.test.ts
       - name: Which shell was picked
         run: bun -e "import('./src/shell.ts').then(m=>console.log(m.currentShell()))"
       - name: PowerShell shell test

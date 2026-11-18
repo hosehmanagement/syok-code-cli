@@ -292,6 +292,7 @@ test("whole program: syok -p with two workers; --workers 0 switches the tool off
 // Under confinement the ordinary temporary folder is hidden from the AI's commands, which is why the copies live inside the project's .git folder.
 // This proves a confined worker can work in its copy, use git there, and still cannot write outside the project.
 test("whole program, confined: workers run in their copies, git works there, and nothing escapes the project", async () => {
+  if (process.platform !== "linux" && process.platform !== "darwin") return; // the Linux and Mac kind; the Windows kind has its own tests in confine-win.test.ts
   const baseDir = mkdtempSync(join(realpathSync(process.platform === "darwin" ? homedir() : tmpdir()), ".syok-par-confine-"));
   try {
     const d = join(baseDir, "proj"), outside = join(baseDir, "outside"), home = join(baseDir, "home"); for (const x of [d, outside, home]) mkdirSync(x, { recursive: true });

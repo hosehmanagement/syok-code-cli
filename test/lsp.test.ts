@@ -11,7 +11,8 @@ import { makeCtx, toolDefs, runTool } from "../src/tools.ts";
 import { planConfine, probeConfine, setConfine } from "../src/confine.ts";
 import { DEFAULT } from "../src/profiles.ts";
 
-const bin = (n: string) => join(import.meta.dir, "..", "node_modules", ".bin", n + (process.platform === "win32" ? ".cmd" : ""));
+// On Windows the starter file is .exe (bun) or .cmd (npm), whichever the package manager made.
+const bin = (n: string) => { const b = join(import.meta.dir, "..", "node_modules", ".bin", n); return process.platform === "win32" ? [".exe", ".cmd"].map((e) => b + e).find((p) => existsSync(p)) || b + ".cmd" : b; };
 const TS = { typescript: { command: bin("typescript-language-server"), args: ["--stdio"] } }, PY = { python: { command: bin("pyright-langserver"), args: ["--stdio"] } };
 const sets: LspSet[] = []; afterAll(() => { for (const s of sets) s.stopAll(); setConfine(null); });
 const tsProject = () => tmpProject({

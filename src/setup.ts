@@ -64,7 +64,7 @@ const confineText = (c: Defaults["confine"], platform = process.platform) => (c 
 const yesNo = (b: boolean) => (b ? "on" : "off");
 
 /** Your saved choices in words. The key is described, never shown. */
-export function describeDefaults(cfg: Config, env: Record<string, string | undefined> = process.env, home = homedir()): string {
+export function describeDefaults(cfg: Config, env: Record<string, string | undefined> = process.env, home = homedir(), platform: string = process.platform): string {
   const d = cleanDefaults(cfg.defaults); const base = String(cfg.base || ""), key = String(cfg.key || "");
   const L = [`Your Syok Code setup (${configFile(home)}):`];
   L.push(`  Syok address          ${base || "not set"}${env.SYOK_BASE_URL ? "   (SYOK_BASE_URL is set on this computer and is used instead)" : ""}`);
@@ -72,7 +72,7 @@ export function describeDefaults(cfg: Config, env: Record<string, string | undef
   L.push(`  Asking before acting  ${d.mode ?? "ask"}: ${MODE_TEXT[d.mode ?? "ask"]}`);
   L.push(`  Model                 ${d.model ?? "syok-coder"}`);
   L.push(`  Web search and pages  ${yesNo(d.web !== false)}`);
-  L.push(`  Confinement           ${confineText(d.confine)}`);
+  L.push(`  Confinement           ${confineText(d.confine, platform)}`);
   L.push(`  Checks after edits    ${yesNo(d.checks !== false)}`);
   L.push(`  Parallel workers      ${(d.parallel_workers ?? DEFAULT_WORKERS) === 0 ? "off" : "up to " + (d.parallel_workers ?? DEFAULT_WORKERS) + " at once, each in its own copy of the project"}`);
   L.push(`  Memory across chats   ${yesNo(d.memory !== false)}`);
@@ -214,7 +214,7 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
   const next: Config = { ...cfg, defaults: { mode, model, web, confine, checks, parallel_workers: workers, memory } };
   if (base) next.base = base; if (key) next.key = key;
   writeConfig(home, next);
-  io.say("\nSaved.\n\n" + describeDefaults(next, env, home));
+  io.say("\nSaved.\n\n" + describeDefaults(next, env, home, platform));
 
   // Only when they apply to this computer or this folder.
   if (o.canAddJob && o.addJob) {

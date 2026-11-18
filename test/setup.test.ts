@@ -174,7 +174,7 @@ function runMain(args: string[], home: string, input: string, env: Record<string
 test("whole program: setup with piped answers saves, checks for real, and never prints the key", async () => {
   const s = standIn(KEY); const home = tmpProject({});
   try {
-    const r = await runMain(["setup"], home, [s.url, KEY, "1", "2", "y", "3", "y"].join("\n") + "\n");
+    const r = await runMain(["setup"], home, [s.url, KEY, "1", "2", "y", process.platform === "win32" ? "n" : "3", "y"].join("\n") + "\n");
     expect(r.err).toBe(""); expect(r.out).toContain("Saved."); expect(r.out).toContain("Ready. Start with: syok"); expect(r.code).toBe(0);
     expect(r.out).not.toContain(KEY);
     expect(readConfig(home)).toEqual({ defaults: { mode: "ask", model: "syok-auto", web: true, confine: false, checks: true, parallel_workers: 2, memory: true }, base: s.url, key: KEY });
