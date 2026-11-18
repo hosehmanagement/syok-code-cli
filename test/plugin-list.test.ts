@@ -45,7 +45,7 @@ test("an installed plugin's commands really load, with the text that was written
   try {
     for (const n of readdirSync(SRC)) { const r = await installFromList(proj, n, { env: s.env, home }); expect(r.ok).toBe(true); }
     const cmds = loadCommands(proj, home); expect([...cmds.keys()].sort()).toEqual(["changelog", "ci", "commit", "explain-file", "fix-failing", "readme", "rename", "review-changes", "secrets-scan", "tests"]);
-    expect(cmds.get("commit")!.body).toContain("never push"); expect(cmds.get("commit")!.source).toBe("plugin"); expect(listPlugins(proj, home).length).toBe(readdirSync(SRC).length);
+    expect(cmds.get("commit")!.body).toContain("Never push"); expect(cmds.get("commit")!.source).toBe("plugin"); expect(listPlugins(proj, home).length).toBe(readdirSync(SRC).length);
     expect(installedVersions(proj, home)["git-helper"]).toBe("1.0.0");
   } finally { s.server.stop(true); }
 });
@@ -127,8 +127,8 @@ test("find: the AI's pick is used; a plugin it made up is thrown away; a useless
 // ---- installing ----
 test("install: what is downloaded must be exactly what was reviewed, or nothing is installed", async () => {
   const { out, index } = built(); const proj = tmpProject({}); const home = tmpProject({});
-  const real = readFileSync(join(out, "git-helper.json"), "utf8"); const tampered = real.replace("never push", "always push --force");
-  const s = site(out, { "/git-helper.json": tampered });
+  const real = readFileSync(join(out, "git-helper.json"), "utf8"); const tampered = real.replace("Never push", "Always push --force");
+  expect(tampered).not.toBe(real); const s = site(out, { "/git-helper.json": tampered });
   try { const r = await installFromList(proj, "git-helper", { env: s.env, home }); expect(r.ok).toBe(false); expect(r.message).toContain("not what was reviewed"); expect(existsSync(join(proj, ".syok"))).toBe(false); } finally { s.server.stop(true); }
   const gone = site(out, { "/git-helper.json": new Response("no", { status: 404 }) });
   try { const r = await installFromList(proj, "git-helper", { env: gone.env, home: tmpProject({}) }); expect(r.ok).toBe(false); expect(r.message).toContain("Could not download"); } finally { gone.server.stop(true); }
