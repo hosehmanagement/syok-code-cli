@@ -74,6 +74,12 @@ export function describeLangs(root: string, setting: LspSetting): string {
   return L.join("\n");
 }
 
+/** One name for a file, however its address is spelled. On Windows a helper may answer with file:///c%3A/... or a different
+ *  letter case for the same file that was sent as file:///C:/..., and the two must be recognised as one. */
+export function uriKey(uri: string): string {
+  let p = uri; try { p = fileURLToPath(uri); } catch { try { p = decodeURIComponent(uri); } catch {} }
+  return process.platform === "win32" || /^[A-Za-z]:[\\/]/.test(p) || /^file:\/\/\/[A-Za-z](:|%3A)/i.test(uri) ? p.replace(/\\/g, "/").toLowerCase() : p;
+}
 // ---- talking to one helper ----
 export class LspClient {
   proc!: ChildProcess; id = 0; buf = Buffer.alloc(0); pending = new Map<number, { ok: (v: any) => void; no: (e: Error) => void; t: any }>(); dead = ""; open = new Map<string, { version: number; mtime: number }>();
@@ -96,7 +102,7 @@ export class LspClient {
       const body = this.buf.subarray(head + 4, head + 4 + len).toString("utf8"); this.buf = this.buf.subarray(head + 4 + len);
       let msg: any; try { msg = JSON.parse(body); } catch { continue; }
       if (msg.id !== undefined && (("result" in msg) || ("error" in msg)) && msg.method === undefined) { const p = this.pending.get(msg.id); if (p) { this.pending.delete(msg.id); clearTimeout(p.t); msg.error ? p.no(new Error(String(msg.error.message || "the helper reported an error").slice(0, 300))) : p.ok(msg.result); } }
-      else if (msg.method === "textDocument/publishDiagnostics") { const uri = String(msg.params?.uri || ""); this.diags.set(uri, Array.isArray(msg.params?.diagnostics) ? msg.params.diagnostics : []); const w = this.diagWait.get(uri); if (w) { this.diagWait.delete(uri); w.forEach((f) => f()); } }
+      else if (msg.method === "textDocument/publishDiagnostics") { const uri = uriKey(String(msg.params?.uri || "")); this.diags.set(uri, Array.isArray(msg.params?.diagnostics) ? msg.params.diagnostics : []); const w = this.diagWait.get(uri); if (w) { this.diagWait.delete(uri); w.forEach((f) => f()); } }
       else if (msg.id !== undefined && msg.method) { // the helper asks us something: answer the few questions that matter, politely decline the rest
         const r = msg.method === "workspace/configuration" ? (msg.params?.items || []).map(() => null) : msg.method === "workspace/workspaceFolders" ? [{ uri: pathToFileURL(this.root).href, name: "project" }] : null;
         this.send({ jsonrpc: "2.0", id: msg.id, result: r });
@@ -124,8 +130,8 @@ export class LspClient {
   sync(abs: string): string {
     const uri = this.uri(abs); let text = "", mtime = 0; try { text = readFileSync(abs, "utf8"); mtime = statSync(abs).mtimeMs; } catch { return uri; }
     const o = this.open.get(uri); const lid = this.lang.ids[extname(abs).toLowerCase()] || this.lang.id;
-    if (!o) { this.changes++; this.open.set(uri, { version: 1, mtime }); this.diags.delete(uri); this.notify("textDocument/didOpen", { textDocument: { uri, languageId: lid, version: 1, text } }); }
-    else if (o.mtime !== mtime) { this.changes++; o.version++; o.mtime = mtime; this.diags.delete(uri); this.notify("textDocument/didChange", { textDocument: { uri, version: o.version }, contentChanges: [{ text }] }); }
+    if (!o) { this.changes++; this.open.set(uri, { version: 1, mtime }); this.diags.delete(uriKey(uri)); this.notify("textDocument/didOpen", { textDocument: { uri, languageId: lid, version: 1, text } }); }
+    else if (o.mtime !== mtime) { this.changes++; o.version++; o.mtime = mtime; this.diags.delete(uriKey(uri)); this.notify("textDocument/didChange", { textDocument: { uri, version: o.version }, contentChanges: [{ text }] }); }
     return uri;
   }
   /** Every file the helper has open is brought up to date, and it is told about files changed on the disk. */
@@ -143,10 +149,11 @@ export class LspClient {
   async diagnostics(abs: string, ms = 15000): Promise<any[] | null> {
     const uri = this.sync(abs);
     if (this.caps.diagnosticProvider) { try { const r = await this.request("textDocument/diagnostic", { textDocument: { uri } }, ms); if (r && Array.isArray(r.items)) return r.items; } catch { if (this.dead) throw new Error(this.dead); } }
-    if (!this.diags.has(uri)) await new Promise<void>((ok) => { const t = setTimeout(ok, ms); const l = this.diagWait.get(uri) || []; l.push(() => { clearTimeout(t); ok(); }); this.diagWait.set(uri, l); });
+    const k = uriKey(uri);
+    if (!this.diags.has(k)) await new Promise<void>((ok) => { const t = setTimeout(ok, ms); const l = this.diagWait.get(k) || []; l.push(() => { clearTimeout(t); ok(); }); this.diagWait.set(k, l); });
     if (this.dead) throw new Error(this.dead);
-    if (this.diags.has(uri)) await new Promise((ok) => setTimeout(ok, 250)); // helpers often send a first, incomplete list: give the full one a moment
-    return this.diags.get(uri) ?? null;
+    if (this.diags.has(k)) await new Promise((ok) => setTimeout(ok, 250)); // helpers often send a first, incomplete list: give the full one a moment
+    return this.diags.get(k) ?? null;
   }
   stop() { if (!this.proc || this.dead) return; const p = this.proc; this.request("shutdown", null, 2000).catch(() => {}).finally(() => { this.notify("exit", null); setTimeout(() => { try { p.kill(); } catch {} }, 300).unref?.(); }); setTimeout(() => { try { p.kill("SIGKILL"); } catch {} }, 3000).unref?.(); }
 }

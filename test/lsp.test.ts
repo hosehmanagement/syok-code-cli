@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { tmpProject, call } from "./helpers.ts";
-import { LspSet, LspClient, lspTool, detectLangs, findServer, describeLangs, lspAvailable, resetLspCache, LANGS, langOf } from "../src/lsp.ts";
+import { LspSet, LspClient, lspTool, detectLangs, findServer, describeLangs, lspAvailable, resetLspCache, LANGS, langOf, uriKey } from "../src/lsp.ts";
 import { makeCtx, toolDefs, runTool } from "../src/tools.ts";
 import { planConfine, probeConfine, setConfine } from "../src/confine.ts";
 import { DEFAULT } from "../src/profiles.ts";
@@ -130,3 +130,11 @@ test("under confinement the helper still works, and runs inside the confinement"
     set.stopAll();
   } finally { setConfine(null); rmSync(base, { recursive: true, force: true }); }
 }, 120000);
+
+test("a file is recognised however a helper spells its address (Windows drive letters and escaped colons)", () => {
+  expect(uriKey("file:///C:/Users/Me/proj/src/a.ts")).toBe(uriKey("file:///c%3A/Users/Me/proj/src/a.ts"));
+  expect(uriKey("file:///c:/users/me/proj/src/A.ts")).toBe(uriKey("file:///C:/Users/Me/proj/src/a.ts"));
+  expect(uriKey("file:///C:/Users/Me/proj/src/a.ts")).not.toBe(uriKey("file:///C:/Users/Me/proj/src/b.ts"));
+  if (process.platform !== "win32") { expect(uriKey("file:///home/me/Proj/a.ts")).toBe("/home/me/Proj/a.ts"); expect(uriKey("file:///home/me/Proj/a.ts")).not.toBe(uriKey("file:///home/me/proj/a.ts")); } // letter case matters where the disk says it does
+  expect(uriKey("file:///home/me/my%20proj/a.ts")).toContain("my proj");
+});
