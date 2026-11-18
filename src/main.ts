@@ -63,6 +63,7 @@ Checks after edits (on by default):
   --no-checks                                  switch both off   (or "checks": false in .syok/settings.json)
   "check_command": "npm run typecheck"         in .syok/settings.json: your own project check
 Usage: after each task you see tokens in and out and which provider answered; /usage shows the session total.
+  syok usage [--days 30|--all] [--by day|model|project] [--json]   everything used before, kept on this computer (token counts only)
   "prices": { "gpt-5": { "in": 1.25, "out": 10 } }   in .syok/settings.json: US dollars per million tokens, for a cost estimate
 GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
   syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
@@ -256,6 +257,16 @@ if (process.argv[2] === "action") {
   });
   console.log("Result: " + r.did); process.exit(r.code);
 }
+if (process.argv[2] === "usage") {
+  // The usage history: what Syok Code used, by day, by who really answered and by project. Read from ~/.syok/usage.
+  const U = await import("./usage.ts"); const uroot = resolve(arg("--cwd", process.cwd()));
+  const days = has("--all") ? 0 : Math.max(1, Math.floor(+arg("--days", "30")) || 30);
+  const by = arg("--by", "") as any; if (by && !["day", "model", "project"].includes(by)) { console.error('--by takes day, model or project'); process.exit(2); }
+  const lines = U.readUsage({ days }); const prices = readJson(join(uroot, ".syok", "settings.json")).prices || cfg.prices;
+  if (has("--json")) console.log(JSON.stringify({ days, dir: U.usageDir(), calls: lines.length, by_day: U.groupBy(lines, "day"), by_model: U.groupBy(lines, "model"), by_project: U.groupBy(lines, "project"), cost: U.costOf(lines, prices) }, null, 2));
+  else console.log(U.describeHistory(lines, { days, by: by || undefined, prices, dir: U.usageDir() }));
+  process.exit(0);
+}
 if (process.argv[2] === "mcp") {
   // Signing in to hosted tool servers through the browser. Needs no Syok key.
   const A = await import("./mcp-auth.ts"); const mroot = resolve(arg("--cwd", process.cwd()));
@@ -357,6 +368,8 @@ const resumeRef = has("--resume") ? (arg("--resume").startsWith("-") ? "" : arg(
 const resumed = has("--continue") || has("--resume") ? loadSession(root, resumeRef || undefined) : null;
 if ((has("--continue") || has("--resume")) && !resumed) { console.error("No saved chat to continue. Chats are saved in .syok/sessions."); process.exit(2); }
 let sessionId = resumed?.id || newSessionId();
+// The usage history ("syok usage"): one line per AI call with token counts only. Off with "usage_log": false or SYOK_USAGE_LOG=0.
+{ const U = await import("./usage.ts"); U.setUsageContext({ session: sessionId, project: root, on: settings.usage_log !== false && cfg.usage_log !== false && (cfg.defaults || {}).usage_log !== false }); }
 if (resumed && !has("--model") && resumed.model) model = resumed.model;
 let history: Msg[] | undefined = resumed?.messages;
 const cps: Checkpoint[] = [];
@@ -503,7 +516,7 @@ for (;;) {
     if (!ref) { console.log(describeSessions(root) + "\nType /resume <number> to open one."); continue; }
     const s2 = loadSession(root, ref);
     if (!s2) { console.log("No such chat."); continue; }
-    history = s2.messages; sessionId = s2.id; if (s2.model) model = s2.model; console.log("Continuing: " + s2.title); continue;
+    history = s2.messages; sessionId = s2.id; (await import("./usage.ts")).setUsageContext({ session: sessionId }); if (s2.model) model = s2.model; console.log("Continuing: " + s2.title); continue;
   }
   if (line === "/plugins") { console.log(describePlugins(listPlugins(root))); continue; }
   if (line === "/commands") { console.log(describeCommands(loadCommands(root))); continue; }

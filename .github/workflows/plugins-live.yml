@@ -4,7 +4,7 @@ name: plugins live test
 on:
   workflow_dispatch:
   pull_request:
-    paths: ['plugins/**', 'src/plugin-list.ts', 'src/plugins.ts', 'scripts/build-plugins.ts', 'test/live/plugins-live.sh', '.github/workflows/plugins-live.yml']
+    paths: ['plugins/**', 'src/plugin-list.ts', 'src/plugins.ts', 'src/usage.ts', 'scripts/build-plugins.ts', 'test/live/plugins-live.sh', '.github/workflows/plugins-live.yml']
 permissions:
   contents: read
 jobs:

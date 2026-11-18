@@ -3,6 +3,7 @@
 # never the AI's own claim. The plugins are installed the real way, by name, from a list served on this computer.
 # Needs SYOK_BASE_URL and SYOK_API_KEY. Usage: plugins-live.sh <path to main.ts or syok.js>
 set -u
+export SYOK_USAGE_DIR="$(mktemp -d)"   # the usage history of every real task below, checked at the end
 SYOK="$1"; MODEL="${MODEL:-syok-coder}"; fails=0; W="$(mktemp -d)"; HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(cd "$HERE/../.." && pwd)"
 ok() { echo "PASS $1"; }; bad() { echo "FAIL $1"; fails=$((fails+1)); }
 run() { bun "$SYOK" "$@"; }
@@ -134,6 +135,23 @@ if grep -vE '^(  )?(\[[a-z-]+\] )?> ' "$W/sec.txt" | grep -qE "$KEYMID|$PW"; the
 LAST="$(grep -E '^`?Findings: [0-9]+`?$' "$W/sec.txt" | tail -1 | tr -d '`')"; echo "   $LAST"
 [ "$LAST" = "Findings: 2" ] && ok "scan: exactly the two planted secrets are counted (the placeholder and the value read from the environment are not)" || bad "scan: expected 'Findings: 2', got '${LAST:-no count line}'"
 [ "$(changed "$P")" = "$S0" ] && ok "scan: nothing was changed" || bad "scan: files were changed by a read-only scan"
+
+echo "=== 9. usage history: what the real tasks above left behind"
+( cd "$W" && run usage --all --json > "$W/usage.json" 2>&1 ); run usage --all | head -20
+python3 - "$W/usage.json" > "$W/usage-check.txt" 2>&1 <<'PY'
+import sys, json, glob, os
+j = json.load(open(sys.argv[1])); lines = [json.loads(l) for f in glob.glob(os.environ["SYOK_USAGE_DIR"] + "/*.jsonl") for l in open(f) if l.strip()]
+assert j["calls"] == len(lines) >= 8, "expected at least one call per plugin, got %d" % len(lines)
+assert all(l["input"] > 0 for l in lines), "a call with no input tokens"
+assert sum(l["output"] for l in lines) > 0, "no output tokens at all"
+assert all(l["provider"] and l["model"] for l in lines), "the real server did not say who answered on every call"
+assert len({l["session"] for l in lines}) >= 8, "each task should be its own chat"
+assert len({l["project"] for l in lines}) >= 8, "each task ran in its own project folder"
+raw = "".join(open(f).read() for f in glob.glob(os.environ["SYOK_USAGE_DIR"] + "/*.jsonl"))
+for secret in ["Tr0ub4dor-horse-battery-77", "SELECT * FROM users", "priceWithDiscount"]: assert secret not in raw, "message text leaked into the usage history: " + secret
+print("valid %d calls, %d chats" % (len(lines), len({l["session"] for l in lines})))
+PY
+grep -q "^valid" "$W/usage-check.txt" && ok "usage: $(cat "$W/usage-check.txt"); real token counts and who answered on every line; no message text" || bad "usage: $(tail -1 "$W/usage-check.txt")"
 
 kill $LP 2>/dev/null
 echo; if [ $fails -eq 0 ]; then echo "All plugin checks passed."; else echo "$fails plugin check(s) FAILED"; exit 1; fi
