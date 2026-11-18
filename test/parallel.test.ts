@@ -1,5 +1,6 @@
 // Parallel editing: workers in separate copies, joined afterwards. Real git, real files; the workers are scripted.
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
+setDefaultTimeout(90000); // these tests run real git many times; on Windows that alone takes longer than the usual five seconds
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
