@@ -28,6 +28,8 @@ export const SAFE = [
 export interface Settings { allow?: string[]; deny?: string[];
   /** Hold the AI's commands inside the project folder (Linux, Mac): true, or "no-network" to cut the network too. */
   confine?: boolean | "no-network";
+  /** Parallel editing: how many workers may change the project at the same time, each in its own copy (default 2, at most 8). 0 or false switches it off. */
+  parallel_workers?: number | boolean;
   /** Custom helpers (.syok/agents and the files of other tools): false switches them off. */
   agents?: boolean;
   /** run_command: default seconds (120) and the most the AI may ask for (600). Hard ceiling 24 hours. */
