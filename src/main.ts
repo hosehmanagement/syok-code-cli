@@ -71,6 +71,7 @@ Checking your setup:
   syok setup --show | --reset                  see your saved choices | forget them (address and key stay)
   syok mcp                                     list the hosted tool servers of this project and whether you are signed in
   syok mcp login <name> | logout <name>        sign in to a hosted tool server through your browser | forget the pass (--no-browser: only print the address)
+  syok lang                                    language helpers for this project: which are found, and the one line that installs a missing one
   syok doctor                                  check the address, the key, a real AI answer and the programs Syok Code uses
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
@@ -252,6 +253,11 @@ if (process.argv[2] === "confine") {
   console.log(marked.length ? "Folders that confinement has marked so confined commands may write in them:\n" + marked.map((m) => "  " + m).join("\n") + "\nRemove the mark from this folder: syok confine undo" : "Confinement has marked no folder on this computer. Use it with: syok --confine");
   process.exit(0);
 }
+if (process.argv[2] === "lang") {
+  // Which languages this project uses and whether a language helper is found for each. Needs no key.
+  const { describeLangs } = await import("./lsp.ts"); const lroot = resolve(arg("--cwd", process.cwd()));
+  console.log(describeLangs(lroot, readJson(join(lroot, ".syok", "settings.json")).lsp)); process.exit(0);
+}
 if (process.argv[2] === "agents") {
   // Lists the custom helpers found for this project. Needs no key.
   const { loadAgents, describeAgents } = await import("./agents.ts");
@@ -283,7 +289,7 @@ const ask = async (what: string, detail: string) => {
 const log = (s: string) => { if (!JSON_OUT) console.log(s); };
 const ctx = makeCtx(root, mode, ask, settings, profile);
 if (settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, root, (s) => console.error(s));
-const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); cleanupParallel(); };
+const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); ctx.lsp?.stopAll(); cleanupParallel(); };
 process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exit(130); });
 const onToken = !JSON_OUT && !has("--no-stream") ? (s: string) => process.stdout.write(s) : undefined;
 ctx.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
