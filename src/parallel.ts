@@ -65,6 +65,8 @@ export function requestProblem(ctx: Ctx, raw: unknown): string {
 }
 
 const active = new Set<{ root: string; dir: string }>();
+// Syok Code's own records (saved chats, saved jobs). A copy may write some while it works; they are never part of a worker's result.
+const OWN = [":(exclude).syok/sessions", ":(exclude).syok/jobs"];
 const DEPS = ["node_modules", ".venv", "venv"]; // big folders git ignores; a copy gets a link to the real one so tests can run
 function alive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch (e: any) { return e?.code === "EPERM"; } }
 function removeRun(root: string, dir: string) {
@@ -106,10 +108,10 @@ function collect(dir: string, snap: string, linked: string[]): { patch: Buffer; 
   must(git(dir, ["add", "-A", "--", "."]), "Could not read a worker's result");
   if (linked.length) git(dir, ["rm", "--cached", "-q", "-r", "--ignore-unmatch", "--", ...linked]);
   const tree = must(git(dir, ["write-tree"]), "Could not read a worker's result");
-  const names = git(dir, ["diff", "--no-renames", "--name-only", "-z", snap, tree]);
+  const names = git(dir, ["diff", "--no-renames", "--name-only", "-z", snap, tree, "--", ".", ...OWN]);
   const files = names.out.split("\0").filter(Boolean);
   if (!files.length) return { patch: Buffer.alloc(0), files };
-  const d = git(dir, ["diff", "--no-renames", "--binary", "--full-index", "--no-color", "--no-ext-diff", snap, tree]);
+  const d = git(dir, ["diff", "--no-renames", "--binary", "--full-index", "--no-color", "--no-ext-diff", snap, tree, "--", ".", ...OWN]);
   if (d.code !== 0) throw new Error("Could not read a worker's result: " + d.err.slice(0, 300));
   return { patch: d.buf, files };
 }

@@ -311,3 +311,15 @@ test("whole program, confined: workers run in their copies, git works there, and
     } finally { s.server.stop(true); }
   } finally { rmSync(baseDir, { recursive: true, force: true }); }
 }, 120000);
+
+test("Syok Code's own records in a copy (saved chats, saved jobs) are never part of a worker's result; other .syok files are", async () => {
+  const d = repo({ "a.txt": "a\n", ".syok/sessions/old.json": "{\"chat\":1}\n", ".syok/agents/helper.md": "v1\n" });
+  const r = await runParallel({ ctx: ctxOf(d), tasks: T("one", "two"), limit: 2, runWorker: async (root, t) => {
+    mkdirSync(join(root, ".syok", "sessions"), { recursive: true }); mkdirSync(join(root, ".syok", "jobs", "1"), { recursive: true });
+    writeFileSync(join(root, ".syok", "sessions", t.name + ".json"), "{}"); writeFileSync(join(root, ".syok", "jobs", "1", "log.txt"), "job"); unlinkSync(join(root, ".syok", "sessions", "old.json"));
+    if (t.name === "one") writeFileSync(join(root, ".syok", "agents", "helper.md"), "v2\n"); return { summary: "", steps: 1, stopped: "finished" };
+  } });
+  expect(r.outcomes.map((x) => x.status)).toEqual(["applied", "no-changes"]); expect(r.outcomes[0].files).toEqual([".syok/agents/helper.md"]);
+  expect(read(d, ".syok/agents/helper.md")).toBe("v2\n"); expect(read(d, ".syok/sessions/old.json")).toBe("{\"chat\":1}\n");
+  expect(existsSync(join(d, ".syok", "sessions", "one.json"))).toBe(false); expect(existsSync(join(d, ".syok", "jobs"))).toBe(false);
+});
