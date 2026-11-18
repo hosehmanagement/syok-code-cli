@@ -11,9 +11,8 @@ import { startJob, jobLog } from "../src/jobs.ts";
 import { DEFAULT } from "../src/profiles.ts";
 
 const all = () => true;
-test("the plan: Windows is refused, the home folder is refused, key folders are hidden, caches stay writable", () => {
-  expect((planConfine({ root: "C:\\p", platform: "win32" }) as any).problem).toContain("not available on Windows");
-  expect((planConfine({ root: "C:\\p", platform: "win32" }) as any).problem).toContain("inside WSL");
+test("the plan: the home folder is refused, key folders are hidden, caches stay writable", () => {
+  expect((planConfine({ root: "C:\\p", home: "C:\\Users\\me", platform: "win32" }) as any).kind).toBe("windows-low"); // Windows has its own kind now: see confine-win.test.ts
   expect((planConfine({ root: "/home/me", home: "/home/me", platform: "linux", exists: all, real: (p) => p }) as any).problem).toContain("needs a project folder");
   expect((planConfine({ root: "/", home: "/home/me", platform: "linux", exists: all, real: (p) => p }) as any).problem).toContain("needs a project folder");
   const have = new Set(["/home/me/.ssh", "/home/me/.netrc", "/home/me/.npm", "/home/me/.syok/config.json", "/home/me/p/.git/hooks", "/home/me/p/.syok/settings.json"]);
@@ -175,3 +174,25 @@ real("on Mac, a confined command cannot list other programs with their environme
     const still = await run("echo ok > mac-still-works.txt && cat mac-still-works.txt && ls /usr/bin | head -1"); expect(still.out).toContain("ok"); expect(still.code).toBe(0);
   } finally { child.kill(); }
 });
+
+// ---- on by default (Linux and Mac) ----
+real("the whole program: confinement is ON without asking; --no-confine and a saved \"off\" switch it off; a project file cannot", async () => {
+  const main = join(import.meta.dir, "..", "src", "main.ts"); const esc = join(outside, "default.txt");
+  const ai = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (req) => { const b: any = await req.json(); const n = b.messages.filter((m: any) => m.role === "tool").length; const msg = n === 0 ? { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: `echo in > from-default.txt; echo pwned > ${sq(esc)}; echo "code=$?"` }) } }] } : { role: "assistant", content: "", tool_calls: [{ id: "c2", type: "function", function: { name: "finish", arguments: JSON.stringify({ summary: "done" }) } }] }; return Response.json({ choices: [{ message: msg }], usage: { total_tokens: 2 } }); } });
+  const go = (args: string[], cwd: string, home = fakeHome) => new Promise<{ code: number | null; out: string; err: string }>((res) => { const p = Bun.spawn(["bun", main, ...args, "--mode", "auto", "--no-checks", "--no-stream", "-p", "do it", "--cwd", cwd], { cwd, env: { ...process.env, HOME: home, SYOK_BASE_URL: `http://127.0.0.1:${ai.port}`, SYOK_API_KEY: "syk_test" }, stdout: "pipe", stderr: "pipe" }); Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]).then(([out, err, code]) => res({ code, out, err })); });
+  const cfg = join(fakeHome, ".syok", "config.json"); const projSettings = join(proj, ".syok", "settings.json");
+  try {
+    const d = await go([], proj); expect(d.code).toBe(0); expect(d.err).toContain("Confined with"); expect(d.err).toContain("On by default; --no-confine switches it off for one run");
+    expect(existsSync(join(proj, "from-default.txt"))).toBe(true); expect(existsSync(esc)).toBe(false);
+    // a project's own file saying "confine": false does not switch it off: a downloaded project must not be able to
+    writeFileSync(projSettings, JSON.stringify({ confine: false })); const p = await go([], proj); expect(p.err).toContain("Confined with"); expect(existsSync(esc)).toBe(false); writeFileSync(projSettings, "{}");
+    const j = await go(["--json"], proj); expect(j.code).toBe(0); expect(() => JSON.parse(j.out)).not.toThrow(); expect(existsSync(esc)).toBe(false); // scripts get clean output, and are confined too
+    const off = await go(["--no-confine"], proj); expect(off.code).toBe(0); expect(off.err).not.toContain("Confined"); expect(off.err).not.toContain("NOT confined"); expect(existsSync(esc)).toBe(true); rmSync(esc);
+    mkdirSync(join(fakeHome, ".syok"), { recursive: true }); writeFileSync(cfg, JSON.stringify({ defaults: { confine: false } })); // answered "off" in syok setup
+    const saved = await go([], proj); expect(saved.code).toBe(0); expect(saved.err).not.toContain("Confined"); expect(existsSync(esc)).toBe(true); rmSync(esc); rmSync(cfg);
+    // where it cannot be done (here: the project is the whole home folder), a default says so once and carries on; an explicit --confine stops
+    const h = await go([], fakeHome); expect(h.code).toBe(0); expect(h.err).toContain("Commands are NOT confined here"); expect(h.err).toContain("needs a project folder"); expect(h.err).toContain("syok setup");
+    if (existsSync(esc)) rmSync(esc);
+    const strict = await go(["--confine"], fakeHome); expect(strict.code).toBe(2);
+  } finally { ai.stop(true); for (const f of [esc, join(fakeHome, "from-default.txt")]) { try { rmSync(f); } catch {} } }
+}, 120000);

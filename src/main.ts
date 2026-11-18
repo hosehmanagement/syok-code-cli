@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { createInterface } from "node:readline/promises";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { runAgent, makeCtx, undoAll, askModel, type Msg , emptyUsage, mergeUsage, describeUsage, type Result } from "./agent.ts";
@@ -67,8 +67,12 @@ Usage: after each task you see tokens in and out and which provider answered; /u
 GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
   syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
 Checking your setup:
-  syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks, parallel workers
+  syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks, parallel workers, memory
   syok setup --show | --reset                  see your saved choices | forget them (address and key stay)
+  syok mcp                                     list the hosted tool servers of this project and whether you are signed in
+  syok mcp login <name> | logout <name>        sign in to a hosted tool server through your browser | forget the pass (--no-browser: only print the address)
+  syok memory | memory forget p2 | memory clear   the notes kept between chats: show them, remove one, remove all (in chat: /memory). --no-memory switches it off for one run
+  syok lang                                    language helpers for this project: which are found, and the one line that installs a missing one
   syok doctor                                  check the address, the key, a real AI answer and the programs Syok Code uses
 Updating:
   syok update                                  get the newest Syok Code (checked before it replaces anything)
@@ -93,11 +97,14 @@ GitHub:
   syok review <pull request number or link> [--comment]   read-only review of a pull request (needs the gh program)
   syok cloud "what to do next"                              hand your work to GitHub's cloud: pushes it to a branch, opens a draft pull request and starts the @syok job there (asks first; in chat: /cloud <what to do>)
   syok pr "title"                                          commit your changes to a branch, push it and open a pull request (asks first)
-Confinement (Linux and Mac): --confine holds every command the AI runs inside the project folder, enforced by the operating system:
-  it also protects your keys: without it a command could still find them by looking at other running programs on this computer
-  commands may read the computer but write only in the project and the temporary folder; folders with keys (.ssh, .aws...) cannot be read
-  --confine-no-network   the same, and no network either.   "confine": true or "no-network" in .syok/settings.json makes it the default; --no-confine switches it off for one run
-  Linux needs the program bubblewrap; Mac uses the built-in sandbox-exec. Not available on Windows.
+Confinement: every command the AI runs is held inside the project folder by the operating system.
+  Linux and Mac: ON by default. Commands may read the computer but write only in the project and the temporary folder; folders with keys
+    (.ssh, .aws...) cannot be read, and a command cannot find your keys by looking at other running programs.
+    --no-confine switches it off for one run (for example for Docker); "syok setup" changes your everyday choice.
+    --confine-no-network   also no network.   Linux needs the program bubblewrap; Mac uses the built-in sandbox-exec.
+    If it cannot work on this computer, Syok Code says so once and carries on; with --confine it stops instead.
+  Windows: --confine gives write protection: commands can change files only in the project. They can still read other files.
+    It marks the project folder for this; "syok confine undo" removes the mark. Inside WSL you get the full Linux kind.
 Isolation: dangerous commands are always blocked. For real isolation use the Daytona sandbox:  syok sandbox start owner/repo | status | stop   then add --sandbox
   With --sandbox, commands run in the sandbox's copy of your GitHub repository and every file the AI edits is copied there too.
   The sandbox starts from what is on GitHub, so push your own uncommitted changes first if the commands need them.
@@ -174,10 +181,13 @@ if (process.argv[2] === "setup") {
   if (has("--reset")) { console.log(S.resetDefaults() ? "Your saved choices are forgotten. The address and the key stay." : "There were no saved choices."); process.exit(0); }
   const { planConfine, probeConfine } = await import("./confine.ts"); const { projectCheck, hasProgram } = await import("./checks.ts"); const { writeWorkflow, WORKFLOW_PATH } = await import("./action.ts");
   let onGithub = false; try { onGithub = /github\.com[:\/]/.test(readFileSync(join(sroot, ".git", "config"), "utf8")); } catch {}
+  const requireWin = process.platform === "win32" ? await import("./confine-win.ts") : null;
   const io = S.terminalIO();
   const r = await S.runSetup({
     root: sroot, io, hasProgram, projectCheck: projectCheck(sroot, readJson(join(sroot, ".syok", "settings.json")))?.command || "",
-    probe: (network) => { const plan = planConfine({ root: sroot, network }); return "problem" in plan ? plan.problem : probeConfine(plan); },
+    probe: (network) => { // tried in a throwaway folder, so it also works when setup is run from your home folder
+      const scratch = mkdtempSync(join(homedir(), ".syok-setup-try-")); try { const plan = planConfine({ root: scratch, network }); const p = "problem" in plan ? plan.problem : probeConfine(plan); if (process.platform === "win32") { try { (requireWin as any)?.undoWindows?.(scratch, homedir()); } catch {} } return p; } finally { try { rmSync(scratch, { recursive: true, force: true }); } catch {} }
+    },
     canAddJob: onGithub && !existsSync(join(sroot, WORKFLOW_PATH)), addJob: () => writeWorkflow(sroot, false),
   });
   io.close();
@@ -222,6 +232,39 @@ if (process.argv[2] === "action") {
   });
   console.log("Result: " + r.did); process.exit(r.code);
 }
+if (process.argv[2] === "mcp") {
+  // Signing in to hosted tool servers through the browser. Needs no Syok key.
+  const A = await import("./mcp-auth.ts"); const mroot = resolve(arg("--cwd", process.cwd()));
+  const servers = (readJson(join(mroot, ".syok", "settings.json")).mcpServers || {}) as Record<string, any>;
+  const sub = process.argv[3], name = process.argv[4];
+  if (sub !== "login" && sub !== "logout") { console.log(A.describeLogins(servers)); process.exit(0); }
+  if (!name || name.startsWith("--") || !servers[name]) { console.error(name && !name.startsWith("--") ? `There is no tool server named ${name} in this project's .syok/settings.json.` : `Say which server: syok mcp ${sub} <name>`); console.error(A.describeLogins(servers)); process.exit(2); }
+  if (sub === "logout") { console.log(A.logout(name, servers[name])); process.exit(0); }
+  const { secretOf } = await import("./mcp.ts");
+  const r = await A.login(name, { url: servers[name].url, oauth: servers[name].oauth ? { ...servers[name].oauth, client_secret: secretOf(servers[name]) } : undefined }, { log: (t) => console.log(t), openUrl: has("--no-browser") ? () => {} : undefined });
+  console.log(r.message); process.exit(r.ok ? 0 : 1);
+}
+if (process.argv[2] === "confine") {
+  // Windows only: confinement marks the project folder so that confined commands may write in it. "undo" removes the mark.
+  const croot = resolve(arg("--cwd", process.cwd()));
+  if (process.platform !== "win32") { console.log("On Linux and Mac, confinement leaves no mark on your folders, so there is nothing to undo. It is on by default; --no-confine switches it off for one run, and syok setup changes your everyday choice."); process.exit(0); }
+  const W = await import("./confine-win.ts");
+  if (process.argv[3] === "undo") { const r = W.undoWindows(croot, homedir()); console.log(r.message); process.exit(r.ok ? 0 : 1); }
+  const marked = W.markedFolders(homedir());
+  console.log(marked.length ? "Folders that confinement has marked so confined commands may write in them:\n" + marked.map((m) => "  " + m).join("\n") + "\nRemove the mark from this folder: syok confine undo" : "Confinement has marked no folder on this computer. Use it with: syok --confine");
+  process.exit(0);
+}
+if (process.argv[2] === "memory") {
+  // The notes Syok Code keeps between chats: show them, remove one, remove all. Needs no key.
+  const M = await import("./memory.ts"); const mroot = resolve(arg("--cwd", process.cwd()));
+  const words = process.argv.slice(3).filter((w, i, all) => !w.startsWith("--") && all[i - 1] !== "--cwd");
+  console.log(M.memoryCommand(M.memoryDir(), mroot, words, readJson(join(mroot, ".syok", "settings.json")).memory !== false && cleanDefaults(cfg.defaults).memory !== false)); process.exit(0);
+}
+if (process.argv[2] === "lang") {
+  // Which languages this project uses and whether a language helper is found for each. Needs no key.
+  const { describeLangs } = await import("./lsp.ts"); const lroot = resolve(arg("--cwd", process.cwd()));
+  console.log(describeLangs(lroot, readJson(join(lroot, ".syok", "settings.json")).lsp)); process.exit(0);
+}
 if (process.argv[2] === "agents") {
   // Lists the custom helpers found for this project. Needs no key.
   const { loadAgents, describeAgents } = await import("./agents.ts");
@@ -253,11 +296,12 @@ const ask = async (what: string, detail: string) => {
 const log = (s: string) => { if (!JSON_OUT) console.log(s); };
 const ctx = makeCtx(root, mode, ask, settings, profile);
 if (settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, root, (s) => console.error(s));
-const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); cleanupParallel(); };
+const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); ctx.lsp?.stopAll(); cleanupParallel(); };
 process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exit(130); });
 const onToken = !JSON_OUT && !has("--no-stream") ? (s: string) => process.stdout.write(s) : undefined;
 ctx.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
 if (has("--no-web")) settings.web = false;
+if (has("--no-memory")) settings.memory = false;
 if (arg("--workers")) settings.parallel_workers = Math.floor(+arg("--workers")) || 0;
 if (has("--no-checks")) settings.checks = false;
 // What this whole session used (every task, skill and helper added up); shown by /usage and after each task.
@@ -268,13 +312,21 @@ function report(r: Result, extra = ""): string {
   const chk = r.check ? (r.check.passed === true ? `; project check passed (${r.check.command})` : r.check.passed === false ? `; PROJECT CHECK STILL FAILING (${r.check.command})` : `; project check not run (${r.check.command})`) : "";
   return `(${r.steps} steps, files changed: ${r.touched.join(", ") || "none"}${extra}${chk})\n(${describeUsage(r.usage, settings.prices)})`;
 }
-if (has("--confine") || has("--confine-no-network") || (settings.confine && !has("--no-confine"))) {
-  // Hold the AI's commands inside the project folder. If that cannot be done on this computer, stop: never run unconfined silently.
-  const { planConfine, probeConfine, setConfine, describeConfine } = await import("./confine.ts");
-  const plan = planConfine({ root, network: !(has("--confine-no-network") || settings.confine === "no-network") });
-  const problem = "problem" in plan ? plan.problem : probeConfine(plan);
-  if (problem) { console.error(problem + (has("--confine") || has("--confine-no-network") ? "" : "\nConfinement is on in your settings. To run without it this once, add --no-confine.")); process.exit(2); }
-  setConfine(plan as any); if (!JSON_OUT) console.error(describeConfine(plan as any));
+{
+  // Hold the AI's commands inside the project folder.
+  //  - Asked for (a flag, or "confine" in your settings): if it cannot be done on this computer, stop. Never run unconfined silently.
+  //  - Not asked for: on Linux and Mac it is on anyway, unless you answered "off" in syok setup or add --no-confine.
+  //    If it cannot be done then, say so once and carry on. On Windows it is never on by itself, because it marks the project folder.
+  const asked = has("--confine") || has("--confine-no-network") || !!settings.confine;
+  const byDefault = !asked && mine.confine !== false && (process.platform === "linux" || process.platform === "darwin");
+  if (!has("--no-confine") && (asked || byDefault)) {
+    const { planConfine, probeConfine, setConfine, describeConfine } = await import("./confine.ts");
+    const plan = planConfine({ root, network: !(has("--confine-no-network") || settings.confine === "no-network") });
+    const problem = "problem" in plan ? plan.problem : probeConfine(plan);
+    if (problem && asked) { console.error(problem + (has("--confine") || has("--confine-no-network") ? "" : "\nConfinement is on in your settings. To run without it this once, add --no-confine.")); process.exit(2); }
+    if (problem) { if (!JSON_OUT) console.error("(Commands are NOT confined here: " + problem.split("\n")[0].replace(/^--confine /, "confinement ").slice(0, 220) + " More: syok doctor. To stop this notice: answer \"off\" in syok setup, or add --no-confine.)"); }
+    else { setConfine(plan as any); if (!JSON_OUT) console.error(describeConfine(plan as any) + (byDefault ? " (On by default; --no-confine switches it off for one run.)" : "")); }
+  }
 }
 if (has("--sandbox")) { ctx.sandbox = (cmd, secs) => sandboxExec({ base, key }, cmd, secs); ctx.sandboxPut = (rel, content) => sandboxPut({ base, key }, rel, content); }
 const resumeRef = has("--resume") ? (arg("--resume").startsWith("-") ? "" : arg("--resume")) : "";
@@ -413,6 +465,7 @@ for (;;) {
     const r = await sendToCloud({ task: line.slice(6).trim(), notes: lastSummary, run: realRun, cwd: root, approve: ask });
     console.log(r.message); continue;
   }
+  if (line === "/memory" || line.startsWith("/memory ")) { const M = await import("./memory.ts"); console.log(M.memoryCommand(M.memoryDir(), root, line.split(/\s+/).slice(1), settings.memory !== false)); continue; }
   if (line === "/agents") { const { describeAgents } = await import("./agents.ts"); console.log(describeAgents(ctx.agents || [])); continue; }
   if (line === "/diff") { const d = sessionDiff(ctx); console.log(d ? colorize(d) : "No changes yet."); continue; }
   if (line === "/jobs") { console.log(ctx.bg.list() + "\nSaved jobs (keep running after you exit):\n" + describeJobs(root)); continue; }

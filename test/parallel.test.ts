@@ -1,5 +1,6 @@
 // Parallel editing: workers in separate copies, joined afterwards. Real git, real files; the workers are scripted.
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
+setDefaultTimeout(90000); // these tests run real git many times; on Windows that alone takes longer than the usual five seconds
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -292,6 +293,7 @@ test("whole program: syok -p with two workers; --workers 0 switches the tool off
 // Under confinement the ordinary temporary folder is hidden from the AI's commands, which is why the copies live inside the project's .git folder.
 // This proves a confined worker can work in its copy, use git there, and still cannot write outside the project.
 test("whole program, confined: workers run in their copies, git works there, and nothing escapes the project", async () => {
+  if (process.platform !== "linux" && process.platform !== "darwin") return; // the Linux and Mac kind; the Windows kind has its own tests in confine-win.test.ts
   const baseDir = mkdtempSync(join(realpathSync(process.platform === "darwin" ? homedir() : tmpdir()), ".syok-par-confine-"));
   try {
     const d = join(baseDir, "proj"), outside = join(baseDir, "outside"), home = join(baseDir, "home"); for (const x of [d, outside, home]) mkdirSync(x, { recursive: true });

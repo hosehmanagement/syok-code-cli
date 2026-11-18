@@ -1,6 +1,7 @@
 // Which shell runs the AI's commands, on every system.
 // Linux and Mac: bash. Windows: Git Bash if installed, else PowerShell, else the old Command Prompt.
 // Everything that starts a command (run_command, background jobs, hooks) goes through here, so Windows works without WSL.
+import { winSpawn } from "./confine-win.ts";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { getConfine, confineArgv } from "./confine.ts";
@@ -70,14 +71,23 @@ export function pickShell(e: ShellEnv = realEnv()): Shell {
 }
 
 let cached: Shell | null = null;
-export function currentShell(): Shell { return (cached ||= pickShell()); }
-export function resetShellCache() { cached = null; }
+let confinedShell: Shell | null = null;
+/** Under Windows confinement Git Bash is not used. Git Bash refuses to start at the low level whenever another Git Bash program
+ *  is already running at the normal level (an open Git Bash window, an editor's terminal), which is most of the time. PowerShell
+ *  has no such problem, so confined commands run in PowerShell, or the Command Prompt when PowerShell is missing. */
+export function shellUnderWindowsConfinement(sh: Shell): Shell {
+  if (sh.kind !== "bash") return sh;
+  return (confinedShell ||= pickShell({ ...realEnv(), env: { ...process.env, SYOK_SHELL: "powershell" } }));
+}
+export function currentShell(): Shell { const sh = (cached ||= pickShell()); return getConfine()?.kind === "windows-low" ? shellUnderWindowsConfinement(sh) : sh; }
+export function resetShellCache() { cached = null; confinedShell = null; }
 
+const PS_TAIL = "\n$__ok = $?; $__c = $LASTEXITCODE; if (-not $__ok) { if ($__c) { exit $__c } else { exit 1 } }; exit 0";
 /** The arguments that make this shell run one command line. */
 export function shellArgs(sh: Shell, command: string): string[] {
   if (sh.kind === "bash") return ["-lc", command];
   // PowerShell -Command reports 1 for any failure; the lines after the command pass the real exit code of a program through.
-  if (sh.kind === "powershell") return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command + "\n$__ok = $?; $__c = $LASTEXITCODE; if (-not $__ok) { if ($__c) { exit $__c } else { exit 1 } }; exit 0"];
+  if (sh.kind === "powershell") return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command + PS_TAIL];
   return ["/d", "/s", "/c", command];
 }
 
@@ -85,6 +95,11 @@ export function shellArgs(sh: Shell, command: string): string[] {
 export function spawnCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, stdio: Array<"ignore" | "pipe" | number>, sh: Shell = currentShell()): ChildProcess {
   const win = process.platform === "win32";
   const c = getConfine();
+  if (c && c.kind === "windows-low") { // Windows: the command is started at the low level, through Syok Code's marked copy of the Command Prompt
+    const w = winSpawn(c as any, shellUnderWindowsConfinement(sh), command, PS_TAIL);
+    const p = spawn(w.exe, w.args, { cwd, env: { ...env, ...w.env, SYOK_CONFINED: "1" }, windowsHide: true, windowsVerbatimArguments: true, stdio });
+    p.once("close", w.cleanup); p.once("error", w.cleanup); return p;
+  }
   if (c) { // --confine: the operating system holds this command inside the project folder
     const w = confineArgv(c, sh.exe, shellArgs(sh, command), cwd);
     return spawn(w.exe, w.args, { cwd, env: { ...env, SYOK_CONFINED: "1" }, detached: true, stdio });

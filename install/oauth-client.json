@@ -1,0 +1,17 @@
+{
+  "client_id": "https://syok-ai.com/syok-code/oauth-client.json",
+  "client_name": "Syok Code",
+  "client_uri": "https://syok-ai.com/syok-code/",
+  "redirect_uris": [
+    "http://127.0.0.1:41753/callback",
+    "http://localhost:41753/callback",
+    "http://127.0.0.1:41754/callback",
+    "http://localhost:41754/callback",
+    "http://127.0.0.1:41755/callback",
+    "http://localhost:41755/callback"
+  ],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "application_type": "native"
+}

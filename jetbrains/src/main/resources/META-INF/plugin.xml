@@ -1,0 +1,28 @@
+<idea-plugin>
+  <id>com.syokai.syokcode</id>
+  <name>Syok Code</name>
+  <vendor url="https://syok-ai.com/syok-code/">Syok AI</vendor>
+  <description><![CDATA[
+    Syok Code in your JetBrains editor. Opens the editor's own terminal and starts the <b>syok</b> program there:
+    open a chat, give it a task, or select some code and ask about it. Your own provider keys, switched automatically by Syok.
+    <br><br>Needs the Syok Code command-line program (one line to install; the add-on shows it when the program is missing).
+    Find the commands under <b>Tools | Syok Code</b> and in the editor's right-click menu.
+  ]]></description>
+  <depends>com.intellij.modules.platform</depends>
+  <depends>org.jetbrains.plugins.terminal</depends>
+  <extensions defaultExtensionNs="com.intellij">
+    <notificationGroup id="Syok Code" displayType="BALLOON"/>
+  </extensions>
+  <actions>
+    <group id="SyokCode.Group" text="Syok Code" popup="true">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+      <action id="SyokCode.Open" class="com.syokai.syokcode.OpenChatAction" text="Open Chat" description="Open a Syok Code chat in the terminal"/>
+      <action id="SyokCode.Task" class="com.syokai.syokcode.GiveTaskAction" text="Give It a Task..." description="Type a task for Syok Code and start it in the terminal"/>
+      <action id="SyokCode.Ask" class="com.syokai.syokcode.AskSelectionAction" text="Ask Syok Code About the Selected Code..." description="Ask a question about the code you selected"/>
+    </group>
+    <group id="SyokCode.EditorPopup">
+      <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+      <reference ref="SyokCode.Ask"/>
+    </group>
+  </actions>
+</idea-plugin>
