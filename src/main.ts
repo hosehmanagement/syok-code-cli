@@ -179,10 +179,13 @@ if (process.argv[2] === "setup") {
   if (has("--reset")) { console.log(S.resetDefaults() ? "Your saved choices are forgotten. The address and the key stay." : "There were no saved choices."); process.exit(0); }
   const { planConfine, probeConfine } = await import("./confine.ts"); const { projectCheck, hasProgram } = await import("./checks.ts"); const { writeWorkflow, WORKFLOW_PATH } = await import("./action.ts");
   let onGithub = false; try { onGithub = /github\.com[:\/]/.test(readFileSync(join(sroot, ".git", "config"), "utf8")); } catch {}
+  const requireWin = process.platform === "win32" ? await import("./confine-win.ts") : null;
   const io = S.terminalIO();
   const r = await S.runSetup({
     root: sroot, io, hasProgram, projectCheck: projectCheck(sroot, readJson(join(sroot, ".syok", "settings.json")))?.command || "",
-    probe: (network) => { const plan = planConfine({ root: sroot, network }); return "problem" in plan ? plan.problem : probeConfine(plan); },
+    probe: (network) => { // tried in a throwaway folder, so it also works when setup is run from your home folder
+      const scratch = mkdtempSync(join(homedir(), ".syok-setup-try-")); try { const plan = planConfine({ root: scratch, network }); const p = "problem" in plan ? plan.problem : probeConfine(plan); if (process.platform === "win32") { try { (requireWin as any)?.undoWindows?.(scratch, homedir()); } catch {} } return p; } finally { try { rmSync(scratch, { recursive: true, force: true }); } catch {} }
+    },
     canAddJob: onGithub && !existsSync(join(sroot, WORKFLOW_PATH)), addJob: () => writeWorkflow(sroot, false),
   });
   io.close();

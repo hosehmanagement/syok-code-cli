@@ -34,7 +34,7 @@ test("a project's settings win over personal choices, but cannot loosen confinem
 });
 
 test("answering everything: saved as chosen, readable by the owner alone, and the key is never shown", async () => {
-  const home = tmpProject({}); const s = scripted(["https://my.syok.example/", KEY, "2", "2", "n", "3", "n"]);
+  const home = tmpProject({}); const s = scripted(["https://my.syok.example/", KEY, "2", "2", "n", "2", "n"]);
   const r = await runSetup({ home, root: home, io: s.io, platform: "linux", env: {}, probe: () => "" });
   expect(r.saved).toBe(true);
   const saved = JSON.parse(readFileSync(configFile(home), "utf8"));
@@ -57,7 +57,7 @@ test("pressing Enter every time keeps what was there, including things setup doe
 test("first time, Enter everywhere: the safe choices", async () => {
   const home = tmpProject({}); const s = scripted(["https://a.example", KEY]);
   await runSetup({ home, root: home, io: s.io, platform: "linux", env: {}, probe: () => "" });
-  expect(readConfig(home).defaults).toEqual({ mode: "ask", model: "syok-coder", web: true, confine: false, checks: true, parallel_workers: 2 });
+  expect(readConfig(home).defaults).toEqual({ mode: "ask", model: "syok-coder", web: true, confine: true, checks: true, parallel_workers: 2 }); // confinement is on unless you say otherwise
 });
 
 test("a wrong address is asked again and never saved", async () => {
@@ -82,25 +82,35 @@ test("auto as the everyday default needs a second yes", async () => {
   expect(readConfig(home).defaults!.mode).toBe("auto"); expect(again.text()).not.toContain("Make auto your everyday default");
 });
 
-test("confinement that this computer cannot do stays off, with the reason", async () => {
-  const home = tmpProject({}); const s = scripted(["https://a.example", KEY, "", "", "", "2"]);
+test("confinement that this computer cannot do: nothing is saved for it, the reason is shown, and choosing off is saved", async () => {
+  const home = tmpProject({}); const s = scripted(["https://a.example", KEY, "", "", "", "1"]);
   const r = await runSetup({ home, root: home, io: s.io, platform: "linux", env: {}, probe: () => "bubblewrap is not installed.\nInstall it with: sudo apt install bubblewrap" });
-  expect(readConfig(home).defaults!.confine).toBe(false);
-  expect(s.text()).toContain("bubblewrap is not installed"); expect(r.notes.join(" ")).toMatch(/Confinement stayed off/);
+  expect("confine" in readConfig(home).defaults!).toBe(false); // not saved as on: a saved "on" that cannot work would stop every run
+  expect(s.text()).toContain("bubblewrap is not installed"); expect(s.text()).toContain("carries on unconfined until it is fixed"); expect(r.notes.join(" ")).toMatch(/cannot work on this computer yet/);
+  expect(s.text()).toContain("Confinement           on (the default on Linux and Mac)");
+  const off = scripted(["", "", "", "", "", "3"]); let probed = false;
+  await runSetup({ home, root: home, io: off.io, platform: "linux", env: {}, probe: () => { probed = true; return ""; } });
+  expect(readConfig(home).defaults!.confine).toBe(false); expect(probed).toBe(false); expect(off.text()).toContain("Confinement           off");
 });
 
 test("the probe is told whether the network stays", async () => {
   const seen: boolean[] = [];
-  for (const pickN of ["2", "3"]) { const home = tmpProject({}); await runSetup({ home, root: home, io: scripted(["https://a.example", KEY, "", "", "", pickN]).io, platform: "darwin", env: {}, probe: (n) => { seen.push(n); return ""; } }); }
+  for (const pickN of ["1", "2"]) { const home = tmpProject({}); await runSetup({ home, root: home, io: scripted(["https://a.example", KEY, "", "", "", pickN]).io, platform: "darwin", env: {}, probe: (n) => { seen.push(n); return ""; } }); }
   expect(seen).toEqual([true, false]);
 });
 
-test("on Windows the confinement question is explained and skipped", async () => {
-  const home = tmpProject({ ".syok/config.json": JSON.stringify({ defaults: { confine: true } }) }); let probed = false;
-  const s = scripted(["https://a.example", KEY, "", "", "", "n"]); // the sixth answer goes to the checks question
-  await runSetup({ home, root: home, io: s.io, platform: "win32", env: {}, probe: () => { probed = true; return ""; } });
-  expect(probed).toBe(false); expect(s.text()).toContain("WSL");
-  expect(readConfig(home).defaults).toEqual({ mode: "ask", model: "syok-coder", web: true, confine: false, checks: false, parallel_workers: 2 });
+test("on Windows the question explains write protection, is off unless you say yes, and is tried before it is saved", async () => {
+  const home = tmpProject({}); let probed = 0;
+  const no = scripted(["https://a.example", KEY, "", "", "", ""]);
+  await runSetup({ home, root: home, io: no.io, platform: "win32", env: {}, probe: () => { probed++; return ""; } });
+  expect(probed).toBe(0); expect(no.text()).toContain("write protection"); expect(no.text()).toContain("can still read your other files"); expect(no.text()).toContain("syok confine undo"); expect(no.text()).toContain("WSL");
+  expect(readConfig(home).defaults).toEqual({ mode: "ask", model: "syok-coder", web: true, confine: false, checks: true, parallel_workers: 2 });
+  const yes = scripted(["", "", "", "", "", "y"]);
+  await runSetup({ home, root: home, io: yes.io, platform: "win32", env: {}, probe: () => { probed++; return ""; } });
+  expect(probed).toBe(1); expect(readConfig(home).defaults!.confine).toBe(true); expect(yes.text()).toContain("it works");
+  const cannot = scripted(["", "", "", "", "", "y"]);
+  await runSetup({ home, root: home, io: cannot.io, platform: "win32", env: {}, probe: () => "Windows refused to mark the project folder" });
+  expect(readConfig(home).defaults!.confine).toBe(false); expect(cannot.text()).toContain("Windows refused to mark the project folder");
 });
 
 test("a number that is not on the list, and an answer that is not y or n, are asked again", async () => {
@@ -164,7 +174,7 @@ function runMain(args: string[], home: string, input: string, env: Record<string
 test("whole program: setup with piped answers saves, checks for real, and never prints the key", async () => {
   const s = standIn(KEY); const home = tmpProject({});
   try {
-    const r = await runMain(["setup"], home, [s.url, KEY, "1", "2", "y", "1", "y"].join("\n") + "\n");
+    const r = await runMain(["setup"], home, [s.url, KEY, "1", "2", "y", "3", "y"].join("\n") + "\n");
     expect(r.err).toBe(""); expect(r.out).toContain("Saved."); expect(r.out).toContain("Ready. Start with: syok"); expect(r.code).toBe(0);
     expect(r.out).not.toContain(KEY);
     expect(readConfig(home)).toEqual({ defaults: { mode: "ask", model: "syok-auto", web: true, confine: false, checks: true, parallel_workers: 2 }, base: s.url, key: KEY });

@@ -99,7 +99,8 @@ onWin("real: the command arrives exactly as written (quotes, &, |, %, $), its ou
 
 onWin("real: programs started by a confined command are held too (node), and installs still work (npm)", async () => {
   const sh = shells().find((s) => s.kind === "powershell")!;
-  const r = await run(`node -e "const fs=require('fs');fs.writeFileSync('node-in.txt','x');try{fs.writeFileSync(String.raw\`${outside}\\node-escape.txt\`,'x');console.log('WROTE-OUTSIDE')}catch(e){console.log('blocked:'+e.code)}"`, sh);
+  writeFileSync(join(proj, "probe.js"), `const fs=require('fs');fs.writeFileSync('node-in.txt','x');try{fs.writeFileSync(${JSON.stringify(join(outside, "node-escape.txt"))},'x');console.log('WROTE-OUTSIDE')}catch(e){console.log('blocked:'+e.code)}`);
+  const r = await run("node probe.js", sh);
   expect(r.out).toContain("blocked:EPERM"); expect(existsSync(join(proj, "node-in.txt"))).toBe(true); expect(existsSync(join(outside, "node-escape.txt"))).toBe(false);
   writeFileSync(join(proj, "package.json"), '{"name":"p","version":"1.0.0"}');
   const n = await run(`npm install is-number --no-audit --no-fund --loglevel=error; node -e "console.log('n=' + require('is-number')(5))"`, sh); expect(n.out).toContain("n=true");

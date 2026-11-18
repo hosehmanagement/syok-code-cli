@@ -58,7 +58,7 @@ const MODE_TEXT: Record<Mode, string> = {
   "plan": "plan only: nothing changes until I approve the plan",
   "auto": "do everything without asking",
 } as Record<Mode, string>;
-const confineText = (c: Defaults["confine"]) => (c === "no-network" ? "on, and no network" : c ? "on" : "off");
+const confineText = (c: Defaults["confine"], platform = process.platform) => (c === "no-network" ? "on, and no network" : c === true ? "on" : c === false ? "off" : platform === "win32" ? "off" : "on (the default on Linux and Mac)");
 const yesNo = (b: boolean) => (b ? "on" : "off");
 
 /** Your saved choices in words. The key is described, never shown. */
@@ -160,20 +160,26 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
 
   // 6. Confinement.
   io.say("");
-  let confine: Defaults["confine"] = d.confine ?? false;
+  let confine: Defaults["confine"] = d.confine ?? (platform === "win32" ? false : true);
   if (platform === "win32") {
-    io.say("6 of 8. Confinement holds the AI's commands inside the project folder. Windows itself cannot do that yet.");
-    io.say("   To have it, run Syok Code inside WSL (Windows' built-in Linux) and run syok setup there. Skipped here.");
-    confine = false;
+    io.say("6 of 8. Confinement on Windows gives write protection: the AI's commands can change files only inside the project folder.");
+    io.say("   They can still read your other files. To make it work, the project folder gets a mark that lets low-privilege programs");
+    io.say("   write in it; \"syok confine undo\" removes the mark. (Inside WSL, Windows' built-in Linux, you get the full kind instead.)");
+    confine = await yn(io, "   Switch it on for every project?", confine === true) ? true : false;
+    if (confine && o.probe) {
+      const problem = o.probe(true);
+      if (problem) { io.say("   This computer cannot do that right now, so it stays off:\n   " + problem.split("\n").join("\n   ")); notes.push("Confinement stayed off: this computer cannot do it yet. Run syok doctor for what is missing."); confine = false; }
+      else io.say("   Tried it on this project folder: it works.");
+    }
   } else {
-    confine = await pick<Defaults["confine"]>(io, "6 of 8. Confinement: hold the AI's commands inside the project folder, so they cannot read your other files or your keys?", [
-      { value: false, text: "off" },
-      { value: true, text: "on (recommended): a few commands that reach outside the project, such as Docker, are blocked until you add --no-confine for that run" },
+    confine = await pick<Defaults["confine"]>(io, "6 of 8. Confinement: hold the AI's commands inside the project folder, so they cannot change your other files or read your keys?", [
+      { value: true, text: "on (recommended, and what you get if you never choose): a few commands that reach outside the project, such as Docker, are blocked until you add --no-confine for that run" },
       { value: "no-network", text: "on, and no network for the AI's commands either" },
+      { value: false, text: "off" },
     ], confine);
     if (confine && o.probe) {
       const problem = o.probe(confine !== "no-network");
-      if (problem) { io.say("   This computer cannot do that right now, so it stays off:\n   " + problem.split("\n").join("\n   ")); notes.push("Confinement stayed off: this computer cannot do it yet. Run syok doctor for what is missing."); confine = false; }
+      if (problem) { io.say("   This computer cannot do that right now. Nothing is saved for this question: Syok Code keeps trying at each start, says so in one line, and carries on unconfined until it is fixed:\n   " + problem.split("\n").join("\n   ")); notes.push("Confinement cannot work on this computer yet. Run syok doctor for what is missing."); confine = undefined; }
       else io.say("   Tried it on this computer: it works.");
     }
   }

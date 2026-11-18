@@ -17,8 +17,8 @@ const { join, resolve, parse } = win32;
 
 export interface WinLow { cmd: string; dir: string; tmp: string; env: Record<string, string> }
 export interface WinPlan { kind: "windows-low"; root: string; network: true; home: string; write: string[]; hide: string[]; lock: string[]; low: WinLow }
-type Run = (exe: string, args: string[], o?: { cwd?: string }) => { status: number | null; stdout: string; stderr: string; error?: any };
-const realRun: Run = (exe, args, o) => { const r = spawnSync(exe, args, { encoding: "utf8", timeout: 60000, windowsHide: true, cwd: o?.cwd }); return { status: r.status, stdout: String(r.stdout || ""), stderr: String(r.stderr || ""), error: r.error }; };
+type Run = (exe: string, args: string[], o?: { cwd?: string; verbatim?: boolean }) => { status: number | null; stdout: string; stderr: string; error?: any };
+const realRun: Run = (exe, args, o) => { const r = spawnSync(exe, args, { encoding: "utf8", timeout: 60000, windowsHide: true, cwd: o?.cwd, windowsVerbatimArguments: !!o?.verbatim }); return { status: r.status, stdout: String(r.stdout || ""), stderr: String(r.stderr || ""), error: r.error }; };
 
 /** Characters the Command Prompt gives a meaning to. A path with one of them cannot be passed through it safely. */
 const RISKY = /[%"^&<>|!]/;
@@ -61,7 +61,7 @@ export function prepareWindows(c: WinPlan, run: Run = realRun, env: Record<strin
     saveMarks(c.home, [...markedFolders(c.home), c.root]);
     // Try it for real: a confined command must be able to write in the project and must NOT be able to write next to the low copy.
     const inside = join(c.root, `.syok-confine-test-${randomBytes(4).toString("hex")}`), outside = join(bin, `outside-test-${randomBytes(4).toString("hex")}`);
-    run(c.low.cmd, ["/d", "/c", `echo ok> "${inside}"`]); run(c.low.cmd, ["/d", "/c", `echo ok> "${outside}"`]);
+    run(c.low.cmd, ["/d", "/c", `echo ok> "${inside}"`], { verbatim: true }); run(c.low.cmd, ["/d", "/c", `echo ok> "${outside}"`], { verbatim: true });
     const wroteInside = existsSync(inside), wroteOutside = existsSync(outside);
     for (const f of [inside, outside]) { try { unlinkSync(f); } catch {} }
     if (wroteOutside) return "--confine does not work on this computer: a command started at the low level could still write outside the project, so Syok Code will not pretend it is confined. (This happens on disks that cannot hold Windows' integrity marks.)";
