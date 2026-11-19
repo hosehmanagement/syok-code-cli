@@ -93,6 +93,8 @@ export interface SetupOpts {
   /** The project check found in this folder (for example "npm test"), or "". */
   projectCheck?: string;
   hasProgram?: (name: string) => boolean;
+  /** Browser sign-in (syok login), offered when no address is saved yet: Enter at the address question. */
+  login?: (say: (text: string) => void) => Promise<{ ok: boolean; base?: string; key?: string; message: string }>;
   /** True when this folder is a GitHub project without the @syok job yet. */
   canAddJob?: boolean; addJob?: () => { ok: boolean; message: string };
 }
@@ -125,22 +127,36 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
 
   // 1. The address.
   let base = String(cfg.base || "");
-  io.say("1 of 9. Your Syok address: the web address of your Syok, for example https://syok-ai.com");
+  let key = String(cfg.key || ""), signedIn = false;
+  io.say("1 of 9. Your Syok address. In Syok open Work, then API Keys: copy the Base URL under \"Connection details\".");
+  io.say("   It looks like https://syok-ai-router-personal-....workers.dev/v1 (the syok-ai.com website address will not work).");
+  if (!base && o.login) io.say("   Easier: just press Enter to sign in through your browser instead. Then there is no address or key to copy at all.");
   if (env.SYOK_BASE_URL) io.say("   (SYOK_BASE_URL is set on this computer. It is used instead of what you save here, until you remove it.)");
   for (let tries = 0; tries < 3; tries++) {
-    const a = (await io.ask(`Address${base ? ` [${base}]` : ""}: `)).trim(); const next = a || base;
+    const a = (await io.ask(`Address${base ? ` [${base}]` : ""}: `)).trim();
+    if (!a && !base && o.login && !io.ended?.()) {
+      io.say("");
+      const r = await o.login((t) => io.say(t));
+      io.say(r.message);
+      if (r.ok && r.base && r.key) { base = r.base.replace(/\/+$/, ""); key = r.key; signedIn = true; break; }
+      io.say("You can try again (Enter), or paste the address yourself.");
+      continue;
+    }
+    const next = a || base;
     const p = addressProblem(next); if (!p) { base = next.replace(/\/+$/, ""); break; }
     io.say(`That will not work: ${p}.`); if (io.ended?.() || tries === 2) { notes.push("The address was not changed: " + p + "."); break; }
   }
 
   // 2. The key. Typed blind, and never repeated back.
-  let key = String(cfg.key || "");
-  io.say("\n2 of 9. Your Syok key: in Syok, open Developer API and make a key. It starts with syk_ and is shown once.");
+  if (signedIn) io.say("\n2 of 9. Your Syok key: made for this computer by the browser sign-in. Nothing to type.");
+  else {
+  io.say("\n2 of 9. Your Syok key. On the same page (Work, then API Keys) press Create key and copy it. It starts with syk_ and is shown once.");
   io.say("   What you type or paste here stays hidden.");
   if (env.SYOK_API_KEY) io.say("   (SYOK_API_KEY is set on this computer. It is used instead of what you save here, until you remove it.)");
   const k = (await io.ask(`Key${key ? " [press Enter to keep the saved one]" : ""}: `, { secret: true })).trim();
   if (k) { key = k; const ks = keyShape(k); io.say(ks.ok ? `   Got it: ${ks.text}.` : `   Saved, but it looks unusual: ${ks.text}. The check at the end will tell.`); }
   else if (!key) notes.push("No key was given. Syok Code cannot answer until one is saved: run syok setup again.");
+  }
 
   // 3. How much it asks.
   io.say("");

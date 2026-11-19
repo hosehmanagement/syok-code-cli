@@ -176,7 +176,7 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
       }
       const bodyText = briefBody(await r.text());
       last = `HTTP ${r.status} from ${host}: ${bodyText}`;
-      if (/daily_limit_reached/.test(bodyText)) { last = "This Syok key reached its daily limit (it resets at midnight UTC; you can raise the limit in Syok > Developer API). " + last; break; }
+      if (/daily_limit_reached/.test(bodyText)) { last = "This Syok key reached its daily limit (it resets at midnight UTC; you can raise the daily cap in Syok, Work, then API Keys). " + last; break; }
       if (isThrottled(r.status, bodyText)) {
         if (++throttled > retryTiming.throttleAttempts) { last = THROTTLE_NOTE + "It stayed throttled for too long. Try again in a few minutes, or move that Cloudflare account to the Workers Paid plan. " + last; break; }
         wait = retryTiming.throttleWaitMs;

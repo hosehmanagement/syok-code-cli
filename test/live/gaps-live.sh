@@ -101,7 +101,7 @@ case "$(uname -s)" in Linux|Darwin)
   [ -f "$P/inside.txt" ] && ok "default: the file inside the project was written" || bad "default: the file inside the project is missing"
   [ ! -e "$O/escape.txt" ] && ok "default: the file outside the project was NOT written" || bad "default: a file was written outside the project"
   run --cwd "$P" --no-confine --mode auto --no-checks --model "$MODEL" -p "Run exactly this shell command with run_command and tell me what it printed: echo outside > $O/escape2.txt; echo exit-code=\$?" > "$W/default-off.txt" 2>&1
-  [ -e "$O/escape2.txt" ] && ! grep -q "^Confined with" "$W/default-off.txt" && ok "default: --no-confine really switches it off" || bad "default: --no-confine did not switch it off"
+  [ -e "$O/escape2.txt" ] && ! grep -q "^Confined with" "$W/default-off.txt" && ok "default: --no-confine really switches it off" || { bad "default: --no-confine did not switch it off"; tail -15 "$W/default-off.txt"; }
   rm -rf "$B";;
 *) echo "(not Linux or Mac)";; esac
 
