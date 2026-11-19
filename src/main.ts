@@ -30,7 +30,7 @@ const has = (n: string) => process.argv.includes(n);
 const JSON_OUT = has("--json") || arg("--output-format") === "json";
 function readJson(p: string) { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return {}; } }
 const HELP = `Syok Code (command line)
-First time? Run: syok setup   (asks for your Syok address and key, then checks that it works)
+First time? Run: syok login   (signs in through your browser: nothing to copy or paste), then syok setup for your everyday choices
 Usage:
   syok                       chat in the current folder
   syok -p "fix the failing test"   run one task and print the result
@@ -69,6 +69,7 @@ Usage: after each task you see tokens in and out and which provider answered; /u
 GitHub: let people write "@syok <what to do>" in issues and pull requests (runs in GitHub Actions, on your Syok key):
   syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
 Checking your setup:
+  syok login                                   sign in through your browser (works on remote computers too); syok logout removes the sign-in here
   syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks, parallel workers, memory
   syok setup --show | --reset                  see your saved choices | forget them (address and key stay)
   syok mcp                                     list the hosted tool servers of this project and whether you are signed in
@@ -200,6 +201,23 @@ const cfg = readJson(join(homedir(), ".syok", "config.json"));
 const base = process.env.SYOK_BASE_URL || cfg.base || "", key = process.env.SYOK_API_KEY || cfg.key || "";
 const { cleanDefaults, applyDefaults } = await import("./setup.ts");
 const mine = cleanDefaults(cfg.defaults); // your personal choices from "syok setup"
+if (process.argv[2] === "login") {
+  // Browser sign-in: no address or key to copy. Works on remote computers too (a Codespace, a server over SSH).
+  const { login } = await import("./login.ts");
+  const r = await login({ say: (t) => console.log(t), home: homedir() });
+  console.log("\n" + r.message);
+  if (!r.ok) process.exit(1);
+  if (process.env.SYOK_BASE_URL || process.env.SYOK_API_KEY) console.log("Note: SYOK_BASE_URL / SYOK_API_KEY are set on this computer and are used instead of what was just saved, until you remove them.");
+  console.log("Next: syok doctor checks that it all works; syok setup saves your everyday choices (it keeps this sign-in).");
+  process.exit(0);
+}
+if (process.argv[2] === "logout") {
+  const S = await import("./setup.ts"); const c = S.readConfig(homedir());
+  if (!c.key && !c.base) { console.log("Not signed in on this computer."); process.exit(0); }
+  delete c.key; delete c.base; S.writeConfig(homedir(), c);
+  console.log("Signed out: the address and the key are removed from this computer. To switch the key off everywhere, revoke it in Syok, Work, API Keys.");
+  process.exit(0);
+}
 if (process.argv[2] === "setup") {
   // A few questions, asked once. Needs no key: giving one is part of it.
   const S = await import("./setup.ts"); const sroot = resolve(arg("--cwd", process.cwd()));
@@ -215,6 +233,7 @@ if (process.argv[2] === "setup") {
       const scratch = mkdtempSync(join(homedir(), ".syok-setup-try-")); try { const plan = planConfine({ root: scratch, network }); const p = "problem" in plan ? plan.problem : probeConfine(plan); if (process.platform === "win32") { try { (requireWin as any)?.undoWindows?.(scratch, homedir()); } catch {} } return p; } finally { try { rmSync(scratch, { recursive: true, force: true }); } catch {} }
     },
     canAddJob: onGithub && !existsSync(join(sroot, WORKFLOW_PATH)), addJob: () => writeWorkflow(sroot, false),
+    login: async (say) => (await import("./login.ts")).login({ say, home: homedir(), save: false }),
   });
   io.close();
   for (const n of r.notes) console.log("\nNote: " + n);
@@ -312,7 +331,7 @@ if (process.argv[2] === "doctor") {
   const r = await doctor({ base, key, root: resolve(arg("--cwd", process.cwd())), model: arg("--model", mine.model || "syok-coder"), self: process.argv[1] || "" });
   console.log(JSON_OUT ? JSON.stringify(r) : describeDoctor(r)); process.exit(r.ok ? 0 : 1);
 }
-if (!base || !key) { console.error("Syok Code has no address or key yet. Run: syok setup   (a few questions, asked once). To see what is missing: syok doctor"); process.exit(2); }
+if (!base || !key) { console.error("Syok Code has no address or key yet. Run: syok login   (signs in through your browser), or syok setup   (a few questions, asked once). To see what is missing: syok doctor"); process.exit(2); }
 const root = resolve(arg("--cwd", process.cwd()));
 let model = arg("--model", mine.model || "syok-coder"), mode = arg("--mode", mine.mode || "ask") as Mode;
 if (!MODES.includes(mode)) { console.error("Unknown mode. Use one of: " + MODES.join(", ")); process.exit(2); }
