@@ -13,12 +13,16 @@ export interface DoctorOpts {
   fetchImpl?: typeof fetch; has?: (program: string) => boolean; platform?: string; site?: string; timeoutMs?: number;
 }
 const modelsUrl = (base: string) => chatUrl(base).replace(/\/chat\/completions$/, "/models");
+/** Where a beginner finds the address and the key in Syok (kept in one place so every message says the same). */
+export const WHERE_ADDRESS = "In Syok open Work, then API Keys, and copy the Base URL under \"Connection details\"";
+export const WHERE_KEY = "In Syok open Work, then API Keys, and press Create key (it is shown once)";
 /** What is wrong with the address, or "" when it looks right. */
 export function addressProblem(base: string): string {
   const b = base.trim(); if (!b) return "no address is set";
   let u: URL; try { u = new URL(b); } catch { return "it is not a web address (it should look like https://your-address)"; }
   if (u.protocol !== "https:" && !(u.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname))) return "it must start with https:// (http:// is only allowed for this computer itself)";
   if (u.username || u.password) return "it must not contain a name or password";
+  if (/^(www\.)?syok-ai\.com$/i.test(u.hostname)) return "that is the Syok website, not your Syok address. " + WHERE_ADDRESS;
   return "";
 }
 /** The key's shape in words, without the key. */
@@ -43,7 +47,7 @@ export async function doctor(o: DoctorOpts): Promise<{ ok: boolean; lines: Line[
   const ap = addressProblem(o.base); const ks = keyShape(o.key);
   if (ap) add("fail", "Syok address", ap, SETUP); else add("ok", "Syok address", new URL(o.base.trim()).origin);
   if (!o.key.trim()) add("fail", "Syok key", ks.text, SETUP);
-  else if (!ks.ok) add("warn", "Syok key", ks.text, "Copy the key again from Syok, Developer API. It is shown once, in full.");
+  else if (!ks.ok) add("warn", "Syok key", ks.text, "Copy the key again in full. " + WHERE_KEY + ".");
   else add("ok", "Syok key", ks.text);
 
   let reached = false;
@@ -51,11 +55,11 @@ export async function doctor(o: DoctorOpts): Promise<{ ok: boolean; lines: Line[
     const auth = { authorization: "Bearer " + o.key.trim() };
     const m = await timed(f, modelsUrl(o.base), { headers: auth }, ms);
     if (m.err) add("fail", "Reach Syok", m.err, "Check the address and your internet connection.");
-    else if (m.res!.status === 401 || m.res!.status === 403) add("fail", "Reach Syok", `Syok answered, and refused the key (${m.res!.status})`, "Make a new developer key in Syok, Developer API, and set it as SYOK_API_KEY.");
-    else if (!m.res!.ok) add("fail", "Reach Syok", `the address answered with error ${m.res!.status}`, "Check that the address is your Syok address, with nothing after it.");
+    else if (m.res!.status === 401 || m.res!.status === 403) add("fail", "Reach Syok", `Syok answered, and refused the key (${m.res!.status})`, "Make a new key and save it with syok setup. " + WHERE_KEY + ".");
+    else if (!m.res!.ok) add("fail", "Reach Syok", `the address answered with error ${m.res!.status}`, "Check the address. " + WHERE_ADDRESS + ", and save it with syok setup.");
     else {
       let n = -1; try { const j: any = await m.res!.json(); if (Array.isArray(j?.data)) n = j.data.length; } catch {}
-      if (n < 0) add("fail", "Reach Syok", "the address answered, but not like Syok does", "Check that the address is your Syok address.");
+      if (n < 0) add("fail", "Reach Syok", "the address answered, but not like Syok does (it may be a web page, not your Syok address)", WHERE_ADDRESS + ", and save it with syok setup.");
       else { reached = true; add("ok", "Reach Syok", `answered in ${m.took} ms, key accepted, ${n} model${n === 1 ? "" : "s"} listed`); }
     }
     if (reached) {

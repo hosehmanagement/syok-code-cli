@@ -30,6 +30,7 @@ const has = (n: string) => process.argv.includes(n);
 const JSON_OUT = has("--json") || arg("--output-format") === "json";
 function readJson(p: string) { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return {}; } }
 const HELP = `Syok Code (command line)
+First time? Run: syok setup   (asks for your Syok address and key, then checks that it works)
 Usage:
   syok                       chat in the current folder
   syok -p "fix the failing test"   run one task and print the result
@@ -129,7 +130,7 @@ Options:
   --max-timeout <sec>   the most one command may run (default 600, up to 86400); longer work belongs in a saved job
   --no-stream           wait for the full answer instead of showing it as it is written
   --json                print the result as JSON (for tests and scripts)
-Setup: run "syok setup". (Or set SYOK_BASE_URL, your Syok address, and SYOK_API_KEY, a syk_ key from Syok > Developer API;
+Setup: run "syok setup". (Or set SYOK_BASE_URL, the Base URL from Syok, Work, API Keys, and SYOK_API_KEY, a syk_ key made on that page;
 or put {"base":"...","key":"..."} in ~/.syok/config.json.)
 In chat: /skills  /skill <name> <task>  (or /<name> <task>)  /gen /translate /debug /explain /test (same as above)  /diff (show every change so far)  /undo  /mode <m>  /model <m>  /jobs  /usage (tokens and providers this session)  /help  /exit
 Extras (in <project>/.syok/settings.json):

@@ -275,3 +275,13 @@ test("the ninth question: memory on or off; saying off cannot be undone by a pro
   expect(applyDefaults({ memory: false }, { memory: true }).memory).toBe(false); expect(applyDefaults({}, { memory: true }).memory).toBeUndefined();
   expect(cleanDefaults({ memory: "yes" })).toEqual({});
 });
+
+test("first question says where the address is, and the website address is refused with the way to the right one", async () => {
+  const home = tmpProject({}); const s = scripted(["https://syok-ai.com", "https://syok-ai.com/", "https://syok-ai-router-personal-x.me.workers.dev/v1", KEY]);
+  const r = await runSetup({ home, root: home, io: s.io, platform: "linux", env: {}, probe: () => "" });
+  const t = s.text();
+  expect(t).toContain("Work, then API Keys"); expect(t).toContain("Base URL"); expect(t).toContain("Create key");
+  expect(t).not.toContain("for example https://syok-ai.com");
+  expect(t.match(/Syok website, not your Syok address/g)?.length).toBe(2);
+  expect(r.saved).toBe(true); expect(JSON.parse(readFileSync(configFile(home), "utf8")).base).toBe("https://syok-ai-router-personal-x.me.workers.dev/v1");
+});

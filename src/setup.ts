@@ -125,7 +125,8 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
 
   // 1. The address.
   let base = String(cfg.base || "");
-  io.say("1 of 9. Your Syok address: the web address of your Syok, for example https://syok-ai.com");
+  io.say("1 of 9. Your Syok address. In Syok open Work, then API Keys: copy the Base URL under \"Connection details\".");
+  io.say("   It looks like https://syok-ai-router-personal-....workers.dev/v1 (the syok-ai.com website address will not work).");
   if (env.SYOK_BASE_URL) io.say("   (SYOK_BASE_URL is set on this computer. It is used instead of what you save here, until you remove it.)");
   for (let tries = 0; tries < 3; tries++) {
     const a = (await io.ask(`Address${base ? ` [${base}]` : ""}: `)).trim(); const next = a || base;
@@ -135,7 +136,7 @@ export async function runSetup(o: SetupOpts): Promise<SetupResult> {
 
   // 2. The key. Typed blind, and never repeated back.
   let key = String(cfg.key || "");
-  io.say("\n2 of 9. Your Syok key: in Syok, open Developer API and make a key. It starts with syk_ and is shown once.");
+  io.say("\n2 of 9. Your Syok key. On the same page (Work, then API Keys) press Create key and copy it. It starts with syk_ and is shown once.");
   io.say("   What you type or paste here stays hidden.");
   if (env.SYOK_API_KEY) io.say("   (SYOK_API_KEY is set on this computer. It is used instead of what you save here, until you remove it.)");
   const k = (await io.ask(`Key${key ? " [press Enter to keep the saved one]" : ""}: `, { secret: true })).trim();

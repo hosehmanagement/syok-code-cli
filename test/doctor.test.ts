@@ -31,6 +31,9 @@ test("address and key are judged by shape, and the key is never echoed", () => {
   expect(addressProblem("")).toContain("no address"); expect(addressProblem("syok.example")).toContain("not a web address");
   expect(addressProblem("http://example.com")).toContain("https://"); expect(addressProblem("https://u:p@example.com")).toContain("name or password");
   expect(addressProblem("https://example.com")).toBe(""); expect(addressProblem("http://127.0.0.1:8787")).toBe(""); expect(addressProblem("http://localhost:1")).toBe("");
+  // the Syok website is the most likely wrong answer: say so, and say where the right address is
+  for (const w of ["https://syok-ai.com", "https://www.syok-ai.com/", "https://SYOK-AI.com/v1"]) { expect(addressProblem(w)).toContain("Syok website"); expect(addressProblem(w)).toContain("Work, then API Keys"); }
+  expect(addressProblem("https://syok-ai-router-personal-abc.someone.workers.dev/v1")).toBe("");
   expect(keyShape("")).toEqual({ ok: false, text: "no key is set" });
   const good = keyShape(KEY); expect(good.ok).toBe(true); expect(good.text).toBe("28 characters, starts with syk_"); expect(good.text).not.toContain(KEY.slice(4));
   const bad = keyShape("sk-abc"); expect(bad.ok).toBe(false); expect(bad.text).toContain("does NOT start with syk_");
@@ -107,3 +110,10 @@ test("the real command: exit code 0 when fine, 1 with a problem, works with no k
     const e = await run(["-p", "x"], {}); expect(e.status).toBe(2); expect(e.stderr).toContain("syok doctor");
   } finally { s.stop(); }
 }, 60000);
+
+test("doctor: an address that answers with a web page is called that, with the way to the right address", async () => {
+  const page = async () => new Response("<!doctype html><title>Syok</title>", { status: 200, headers: { "content-type": "text/html" } });
+  const r = await doctor({ base: "https://syok-elsewhere.example", key: "syk_0123456789abcdef0123", root: tmpProject({}), fetchImpl: page as any, has: () => true, platform: "linux", timeoutMs: 2000 });
+  const reach = r.lines.find((l) => l.name === "Reach Syok")!;
+  expect(reach.level).toBe("fail"); expect(reach.detail).toContain("web page"); expect(reach.fix).toContain("Work, then API Keys");
+});
