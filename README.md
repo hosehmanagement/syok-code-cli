@@ -2,7 +2,7 @@
 
 Syok Code for your own computer: an AI coding agent that reads your project, edits files, runs your tests and fixes what it broke. It talks to **your own Syok AI key**, so automatic key switching (when one provider hits a limit) keeps working in the middle of a long task.
 
-Status: early (v0.12). Built for computers that are fast and stable.
+Status: early (v0.20). Built for computers that are fast and stable.
 
 ## Quick start
 1. Install (one line; you do not need to install anything else first):
@@ -10,8 +10,9 @@ Status: early (v0.12). Built for computers that are fast and stable.
    - Windows (PowerShell): `irm https://syok-ai.com/syok-code/install.ps1 | iex`
 
    Everything goes into the `.syok` folder in your home folder: a private copy of the Bun runtime, the one-file program and the `syok` command. Both downloads are checked against their published checksums. Run the same line again, or `syok update`, to get the newest version.
-2. In Syok AI open **Developer API**, make a key (starts with `syk_`) and note your Syok address.
-3. Run `syok setup`. It asks nine short questions, once: your address, your key (hidden while you type), how much it should ask before acting, which model preset, web access, confinement, checks after edits, how many parallel workers, and memory. It then tests that everything works. Your answers are saved in `.syok/config.json` in your home folder, readable by you alone. `syok setup --show` shows them; `syok setup --reset` forgets the choices and keeps the address and key.
+2. Run `syok login`. It shows a link and a code. Open the link where you are signed in to Syok (it opens by itself on most computers; on a remote computer such as a Codespace, open it on any device), check that the code matches and press **Allow**. Your browser makes a key for this computer (listed in Syok under **Work → API Keys**, where you can revoke it) and sends it back locked so only this terminal can open it. Nothing to copy or paste. `syok logout` forgets it here.
+3. Optional: run `syok setup` for your everyday choices. It asks nine short questions, once: your address (press Enter to sign in through the browser instead), your key (hidden while you type; skipped after a browser sign-in), how much it should ask before acting, which model preset, web access, confinement, checks after edits, how many parallel workers, and memory. It then tests that everything works. Your answers are saved in `.syok/config.json` in your home folder, readable by you alone. `syok setup --show` shows them; `syok setup --reset` forgets the choices and keeps the address and key.
+   - Typing the address and key yourself: in Syok open **Work → API Keys**, copy the **Base URL** (your Syok address, not syok-ai.com) and press **Create key** (it starts with `syk_`).
    - A flag on the command line wins over these choices, and so does a project's `.syok/settings.json`, with two exceptions: a project cannot switch off your confinement, switch web access or memory back on, or raise your number of parallel workers.
    - Without setup, this still works: `SYOK_BASE_URL=https://your-address SYOK_API_KEY=syk_... syok` (Windows PowerShell: `$env:SYOK_BASE_URL="https://your-address"; $env:SYOK_API_KEY="syk_..."; syok`).
    Then run `syok` in your project folder.
