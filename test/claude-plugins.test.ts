@@ -1,16 +1,16 @@
 // Claude Code plugin marketplaces (for example terrylica/cc-skills) in Syok Code: listing, installing only the plugin's own
 // files, Claude's folder layout, ${CLAUDE_PLUGIN_ROOT} and friends, skills the AI opens by itself, and Claude-style hooks.
 import { test, expect } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpProject, fakeAI, call } from "./helpers.ts";
 import { cleanMarket, parseWhere, installFromMarket, switchHooks, describeMarket } from "../src/marketplace.ts";
 import { loadSkills, skillText, skillCatalog, uniqueSkills, skillLabel, expandVars, inlineRuns } from "../src/skills.ts";
 import { loadCommands, renderCommand, describeCommands } from "../src/commands.ts";
 import { loadAgents } from "../src/agents.ts";
 import { runHooks, claudeMatches, claudeInput } from "../src/hooks.ts";
-import { pluginSettings, listPlugins } from "../src/plugins.ts";
+import { pluginSettings, listPlugins, pluginEnv } from "../src/plugins.ts";
 import { runAgent } from "../src/agent.ts";
 
 const node = "node";
@@ -317,7 +317,8 @@ test("commands the AI runs find cc-plugin-root and the plugins' bin folders; a b
   const ai = fakeAI([call("run_command", { command: "cc-plugin-root demo" }), call("run_command", { command: "demo-tool" }), call("run_command", { command: "node -e \"console.log(6*7)\"" }), call("finish", { summary: "ok" })]);
   await runAgent({ root: proj, task: "where", base: "http://fake", key: "k", mode: "auto", fetchImpl: ai.f, settings: { confine: false } as any });
   const tools = ai.seen[ai.seen.length - 1].messages.filter((x: any) => x.role === "tool").map((x: any) => x.content);
-  expect(tools[0]).toContain(join(proj, ".syok", "plugins", "demo")); expect(tools[0]).toContain("[exit code 0]");
+  // The printed line must be exactly the plugin's folder. Compared as a path: in Git Bash on Windows it is printed with forward slashes.
+  expect(resolve(tools[0].split("\n")[0].trim())).toBe(resolve(join(proj, ".syok", "plugins", "demo"))); expect(tools[0]).toContain("[exit code 0]");
   expect(tools[1]).toContain("demo-tool-ran");
   expect(tools[2]).toContain("42"); expect(tools[2]).not.toContain("fake-node"); // a plugin cannot replace a command you already have
   const d = tmpProject({ "slow.js": "setTimeout(()=>{},4000)" });
@@ -325,3 +326,19 @@ test("commands the AI runs find cc-plugin-root and the plugins' bin folders; a b
   const res = await runHooks([{ claude: "*", command: "node slow.js", async: true, plugin: "p", pluginRoot: d }], "PostToolUse", { tool: "run_command", args: {} }, d, "run_command");
   expect(Date.now() - t0).toBeLessThan(2000); expect(res.block).toBe(false);
 }, 30000);
+
+test("cc-plugin-root in Git Bash on Windows prints one kind of slash; elsewhere the folder is printed as it is", () => {
+  if (process.platform === "win32") return; // the real Git Bash run is checked by the test above on Windows
+  const home = tmpProject({ ".syok/plugins/x/plugin.json": "{\"name\":\"x\"}" });
+  pluginEnv("/nonexistent", { PATH: process.env.PATH }, home);
+  const sh = join(home, ".syok", "shims", "cc-plugin-root");
+  const root = tmpProject({}); const proj = join(root, "C:\\Users\\me\\proj"); mkdirSync(join(proj, ".syok", "plugins", "demo"), { recursive: true });
+  const fake = join(root, "fakebin"); mkdirSync(fake); writeFileSync(join(fake, "uname"), "#!/bin/sh\necho MINGW64_NT-10.0-19045\n"); chmodSync(join(fake, "uname"), 0o755);
+  const run = (path: string, name: string) => spawnSync("sh", [sh, name], { env: { PATH: path, SYOK_PROJECT_DIR: proj, HOME: home }, encoding: "utf8" });
+  let r = run(fake + ":" + process.env.PATH, "demo");
+  expect(r.status).toBe(0); expect(r.stdout).toBe(join(root, "C:/Users/me/proj") + "/.syok/plugins/demo\n"); expect(r.stdout).not.toContain("\\");
+  r = run(process.env.PATH!, "demo");
+  expect(r.status).toBe(0); expect(r.stdout).toBe(proj + "/.syok/plugins/demo\n");
+  r = run(process.env.PATH!, "x"); expect(r.status).toBe(0); expect(r.stdout).toBe(join(home, ".syok", "plugins", "x") + "\n");
+  r = run(process.env.PATH!, "nope"); expect(r.status).toBe(1); expect(r.stderr).toContain("no plugin called nope");
+});

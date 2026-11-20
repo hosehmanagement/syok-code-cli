@@ -59,7 +59,9 @@ function ensureShims(home: string): string | null {
   try {
     mkdirSync(dir, { recursive: true });
     const sh = join(dir, "cc-plugin-root"), cmd = join(dir, "cc-plugin-root.cmd");
-    const shText = '#!/bin/sh\n# Syok Code: prints the folder of an installed plugin (stands in for the cc-skills helper of the same name).\nfor d in "$SYOK_PROJECT_DIR/.syok/plugins/$1" "$HOME/.syok/plugins/$1"; do\n  if [ -n "$1" ] && [ -d "$d" ]; then printf \'%s\\n\' "$d"; exit 0; fi\ndone\necho "cc-plugin-root: no plugin called $1 is installed (syok plugin list)" >&2\nexit 1\n';
+    // In Git Bash on Windows the project folder arrives as C:\\...; the printed path uses forward slashes throughout (C:/.../plugins/x),
+    // which Git Bash, Node, Python and Windows itself all accept, instead of a mix of both kinds.
+    const shText = '#!/bin/sh\n# Syok Code: prints the folder of an installed plugin (stands in for the cc-skills helper of the same name).\nfor d in "$SYOK_PROJECT_DIR/.syok/plugins/$1" "$HOME/.syok/plugins/$1"; do\n  if [ -n "$1" ] && [ -d "$d" ]; then\n    case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) d=$(printf \'%s\' "$d" | tr \'\\\\\' \'/\');; esac\n    printf \'%s\\n\' "$d"; exit 0\n  fi\ndone\necho "cc-plugin-root: no plugin called $1 is installed (syok plugin list)" >&2\nexit 1\n';
     const cmdText = '@echo off\r\nrem Syok Code: prints the folder of an installed plugin.\r\nif "%~1"=="" goto none\r\nif exist "%SYOK_PROJECT_DIR%\\.syok\\plugins\\%~1\\" (echo %SYOK_PROJECT_DIR%\\.syok\\plugins\\%~1& exit /b 0)\r\nif exist "%USERPROFILE%\\.syok\\plugins\\%~1\\" (echo %USERPROFILE%\\.syok\\plugins\\%~1& exit /b 0)\r\n:none\r\necho cc-plugin-root: no plugin called %~1 is installed 1>&2\r\nexit /b 1\r\n';
     if (!existsSync(sh) || readFileSync(sh, "utf8") !== shText) writeFileSync(sh, shText, { mode: 0o755 });
     if (!existsSync(cmd) || readFileSync(cmd, "utf8") !== cmdText) writeFileSync(cmd, cmdText);
