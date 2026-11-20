@@ -23,6 +23,17 @@ jobs:
       DO_NOT_TRACK: "1"
       MODEL: ${{ inputs.model || 'syok-auto' }}
     steps:
+      - name: Hide the Syok address in the logs
+        # GitHub hides the exact secret only; the address is also printed as a bare host (by syok doctor, for example).
+        # This hides the host, the address with or without /v1, and the Cloudflare account number inside it, in every later step.
+        env:
+          U: ${{ secrets.SYOK_BASE_URL }}
+        shell: bash
+        run: |
+          h="${U#*://}"; h="${h%%/*}"
+          for v in "$h" "${U%/}" "${U%/v1}" "${U%/v1/}"; do [ -n "$v" ] && echo "::add-mask::$v"; done
+          a="${h#syok-ai-router-personal-}"; a="${a%%.*}"; [ -n "$a" ] && [ "$a" != "$h" ] && echo "::add-mask::$a"
+          exit 0
       - name: Install jcode with its own installer
         run: |
           curl -fsSL https://jcode.sh/install | bash
