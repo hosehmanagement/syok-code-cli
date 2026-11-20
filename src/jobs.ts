@@ -42,7 +42,10 @@ export function startJob(root: string, cmd: string, maxSec = 0): number {
   // The runner is this same program started again. SYOK_ENTRY names the program file when it is not the one that is running (tests, embedding).
   // A saved job keeps the confinement it was started under: the runner is told through its environment.
   const conf = getConfine();
-  const runner = spawn(process.execPath, [...selfArgs(process.argv[1] || "", process.env.SYOK_ENTRY), "__jobrun", dir], { detached: process.platform !== "win32", stdio: "ignore", windowsHide: true, env: { ...process.env, SYOK_CONFINE_PLAN: conf ? JSON.stringify(conf) : "" } });
+  // detached on every system. On Windows a child that is not detached is closed together with this program (tested on a real
+  // Windows machine: the runner was gone before it even started the command), so the job never outlived Syok Code there.
+  // windowsHide keeps the detached runner from opening a console window.
+  const runner = spawn(process.execPath, [...selfArgs(process.argv[1] || "", process.env.SYOK_ENTRY), "__jobrun", dir], { detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env, SYOK_CONFINE_PLAN: conf ? JSON.stringify(conf) : "" } });
   runner.unref();
   meta.runner = runner.pid || 0;
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
