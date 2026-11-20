@@ -32,6 +32,9 @@ printf '{"name":"live-market","owner":{"name":"syok-test"},"plugins":[{"name":"s
 mkdir -p "$M/plugins/stamper/.claude-plugin"; printf '{"name":"stamper","version":"1.0.0"}\n' > "$M/plugins/stamper/.claude-plugin/plugin.json"
 printf -- '---\nname: project-stamp\ndescription: Stamp a project with its official build stamp (writes STAMP.txt). Use whenever the user asks to stamp the project.\n---\nRun this one command from the project folder, exactly as written:\n\n```bash\nnode "${CLAUDE_PLUGIN_ROOT}/scripts/stamp.js"\n```\n\nIt writes STAMP.txt. Do not write STAMP.txt yourself.\n' > "$M/plugins/stamper/skills/project-stamp/SKILL.md"
 printf "require('fs').writeFileSync('STAMP.txt', '%s\\\\n'); console.log('stamped');\n" "$SECRET" > "$M/plugins/stamper/scripts/stamp.js"
+# A skill only the user starts (never picked by the AI itself), used to make the AI really try the command the hook refuses.
+mkdir -p "$M/plugins/stamper/skills/make-blocked"
+printf -- '---\nname: make-blocked\ndescription: Create BLOCKED.txt for the hook test.\ndisable-model-invocation: true\n---\nRun this one command from the project folder, exactly as written:\n\n```bash\necho forbidden-word > BLOCKED.txt\n```\n' > "$M/plugins/stamper/skills/make-blocked/SKILL.md"
 printf '{"hooks":{"PreToolUse":[{"matcher":"Bash|Write|Edit","hooks":[{"type":"command","command":"node \\"${CLAUDE_PLUGIN_ROOT}/hooks/guard.js\\""}]}]}}\n' > "$M/plugins/stamper/hooks/hooks.json"
 printf "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const i=JSON.parse(s);if(JSON.stringify(i.tool_input).includes('forbidden-word'))console.log(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'deny',permissionDecisionReason:'stamper guard: forbidden-word is not allowed'}}));});\n" > "$M/plugins/stamper/hooks/guard.js"
 P="$W/stamp"; newrepo "$P"; echo "# demo" > "$P/README.md"
@@ -44,15 +47,17 @@ grep -q "stamp.js" "$W/stamp.txt" && grep -q "> run_command" "$W/stamp.txt" && o
 
 echo "=== 3. the same skill started by name, as <plugin>:<skill>"
 rm -f "$P/STAMP.txt"
-run --cwd "$P" --mode auto --no-checks --model "$MODEL" skill stamper:project-stamp > "$W/byname.txt" 2>&1; tail -8 "$W/byname.txt"
+run skill stamper:project-stamp --cwd "$P" --mode auto --no-checks --model "$MODEL" > "$W/byname.txt" 2>&1; tail -8 "$W/byname.txt"
 [ "$(cat "$P/STAMP.txt" 2>/dev/null)" = "$SECRET" ] && ok "by name: stamper:project-stamp did its job" || bad "by name: STAMP.txt is missing or wrong"
 
 echo "=== 4. a Claude-style PreToolUse hook refuses a command"
-run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Run exactly this shell command and nothing else: echo forbidden-word > BLOCKED.txt  Then tell me what happened." > "$W/hook.txt" 2>&1; tail -12 "$W/hook.txt"
+# Started as a skill that must run its command, so the AI really tries it (an AI that only talks is sent back to run it).
+run skill stamper:make-blocked --cwd "$P" --mode auto --no-checks --model "$MODEL" > "$W/hook.txt" 2>&1; tail -12 "$W/hook.txt"
+grep -q "> run_command" "$W/hook.txt" && ok "hook: the AI really tried the command" || bad "hook: the AI never tried the command"
 [ ! -f "$P/BLOCKED.txt" ] && ok "hook: the refused command did not run" || bad "hook: BLOCKED.txt exists, the hook did not stop it"
 grep -q "stamper guard: forbidden-word is not allowed" "$W/hook.txt" && ok "hook: its reason reached the AI" || bad "hook: the reason is not in the log"
 ( cd "$P" && run plugin hooks stamper off ) > /dev/null 2>&1
-run --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Run exactly this shell command and nothing else: echo forbidden-word > BLOCKED.txt" > "$W/hook2.txt" 2>&1
+run skill stamper:make-blocked --cwd "$P" --mode auto --no-checks --model "$MODEL" > "$W/hook2.txt" 2>&1
 [ -f "$P/BLOCKED.txt" ] && ok "hook: switched off, it no longer stops anything" || bad "hook: still blocking after syok plugin hooks stamper off"
 
 echo; echo "$fails failed"; [ "$fails" -eq 0 ]
