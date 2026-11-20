@@ -42,12 +42,16 @@ jobs:
           cli-anything-libreoffice --project d.json export render c.pdf -p pdf
           pdftotext c.pdf - | grep -q "control check"
       - name: Record every use of the tool (a small recorder in front of the real program)
+        # Syok Code confines the AI's commands by default: they may write only in the project folder, the temporary folder and
+        # the download caches (~/.cache and others). So the record is kept in ~/.cache, outside the project where the AI works
+        # but still writable from inside the confinement. If the recorder ever cannot write, the tool call fails loudly.
         run: |
           real="$(command -v cli-anything-libreoffice)"
-          mkdir -p "$RUNNER_TEMP/rec"
-          printf '#!/bin/sh\necho "$*" >> "%s/calls.log"\nexec "%s" "$@"\n' "$RUNNER_TEMP" "$real" > "$RUNNER_TEMP/rec/cli-anything-libreoffice"
-          chmod +x "$RUNNER_TEMP/rec/cli-anything-libreoffice"
-          echo "$RUNNER_TEMP/rec" >> "$GITHUB_PATH"
+          rec="$HOME/.cache/syok-cli-anything-rec"; mkdir -p "$rec/bin"; : > "$rec/calls.log"
+          printf '#!/bin/sh\necho "$*" >> "%s/calls.log" || { echo "recorder: cannot write %s/calls.log" >&2; exit 97; }\nexec "%s" "$@"\n' "$rec" "$rec" "$real" > "$rec/bin/cli-anything-libreoffice"
+          chmod +x "$rec/bin/cli-anything-libreoffice"
+          "$rec/bin/cli-anything-libreoffice" --help > /dev/null && grep -q -- "--help" "$rec/calls.log" && : > "$rec/calls.log"
+          echo "$rec/bin" >> "$GITHUB_PATH"; echo "REC_LOG=$rec/calls.log" >> "$GITHUB_ENV"
       - name: Add their instruction file as a Syok skill, straight from their repository
         env:
           SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
@@ -67,16 +71,16 @@ jobs:
           bun src/main.ts skill cli-anything-libreoffice "Make a Writer document with the heading 'Syok CLI-Anything test' and one paragraph that says 'made by Syok Code 6x7=42'. Export it as report.pdf in this folder. Use only the cli-anything-libreoffice tool for this." --cwd work --mode auto --model "$MODEL" --json | tee run.json
       - name: Check the result (strict)
         run: |
-          echo "--- uses of the tool by the AI:"; cat "$RUNNER_TEMP/calls.log"
+          echo "--- uses of the tool by the AI:"; cat "$REC_LOG"
           test -s work/report.pdf
           head -c 5 work/report.pdf | grep -q "%PDF-"
           pdftotext work/report.pdf out.txt; cat out.txt
           grep -q "Syok CLI-Anything test" out.txt
           grep -q "made by Syok Code 6x7=42" out.txt
-          grep -q "export render" "$RUNNER_TEMP/calls.log"
-          grep -Eq "writer add-(heading|paragraph)" "$RUNNER_TEMP/calls.log"
+          grep -q "export render" "$REC_LOG"
+          grep -Eq "writer add-(heading|paragraph)" "$REC_LOG"
           node -e "const j=JSON.parse(require('fs').readFileSync('run.json','utf8').trim().split('\n').pop()); if(!(j.commands>=3)) {console.error('the AI ran too few commands: '+j.commands); process.exit(1)} console.log('commands run:', j.commands, '| stopped:', j.stopped)"
       - name: Summary
         if: always()
         run: |
-          { echo '```'; cat "$RUNNER_TEMP/calls.log" 2>/dev/null; echo; tail -1 run.json 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; cat "$REC_LOG" 2>/dev/null; echo; tail -1 run.json 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

@@ -13,6 +13,8 @@ import { startJob, jobLog, stopJob, describeJobs } from "./jobs.ts";
 import { webFetch, webSearch, checkUrl, hostOf, type WebDeps } from "./web.ts";
 import { quickCheck, quickLine } from "./checks.ts";
 import { agentsHint, loadAgents, type Agent } from "./agents.ts";
+import { loadSkills, skillLabel, skillText, uniqueSkills } from "./skills.ts";
+import { pluginEnv } from "./plugins.ts";
 import { findSymbol, describeSymbol, outline as symbolOutline, describeOutline, readSmall } from "./symbols.ts";
 
 /** Seconds a run_command may take: the AI's request, limited by the user's settings (default max 10 minutes, hard ceiling 24 hours). */
@@ -49,10 +51,11 @@ export const TOOLS = [
   fn("delegate", "Hand a sub-task to a helper with a fresh, empty context so it does not fill your memory. role 'explorer' (default) is read-only: use it to search or read a lot and get a short answer; several explorers in one message run in parallel. role 'worker' may edit files and run commands; use it for one self-contained change. Give a complete, specific task.", { task: { type: "string" }, role: { type: "string", description: "explorer, worker, or the name of one of the user's helpers" } }, ["task"]),
   fn("parallel_edit", "Run two or more workers AT THE SAME TIME, each making one change in its own separate copy of the project; afterwards their changes are joined into the real project. Use it when a job splits into independent changes that touch DIFFERENT files (for example: three modules that each need the same kind of update, or a feature plus its documentation). Do not use it for changes to the same file or for steps that depend on each other: do those yourself, in order. Each worker starts with an empty memory, so every task must be complete on its own: what to change, in which files, and how to check it. A worker whose change overlaps with another's is not joined, and you are told so you can redo it. After it returns, run the project's tests on the joined result.", { tasks: { type: "array", description: "two to eight tasks", items: { type: "object", properties: { name: { type: "string", description: "a short name, for example api or docs" }, task: { type: "string", description: "complete, specific instructions" } }, required: ["name", "task"] } } }, ["tasks"]),
   fn("finish", "Call when the task is done (or cannot be done). Give a short plain summary.", { summary: { type: "string" } }, ["summary"]),
+  fn("skill", "Open one of the user's skills (listed in your instructions under \"Skills you can use\") and get its full instructions. Call it before doing a task the skill is for, then follow it. Optional args = the details of what the user wants, as the skill expects them.", { name: { type: "string" }, args: { type: "string" } }, ["name"]),
 ];
 
 export const WEB_TOOLS = new Set(["web_search", "web_fetch"]);
-export const READONLY = new Set(["list_files", "read_file", "search", "find_files", "find_symbol", "outline", "lsp", "finish"]);
+export const READONLY = new Set(["list_files", "read_file", "search", "find_files", "find_symbol", "outline", "lsp", "finish", "skill"]);
 export function toolDefs(c: Ctx): any[] {
   let t: any[] = TOOLS.filter((x) => !c.allowed || c.allowed.has(x.function.name));
   if (c.depth > 0) t = t.filter((x) => x.function.name !== "delegate");
@@ -61,6 +64,7 @@ export function toolDefs(c: Ctx): any[] {
   if (!lspAvailable(c.root, c.settings.lsp)) t = t.filter((x) => x.function.name !== "lsp");
   if (c.settings.memory === false || c.depth > 0) t = t.filter((x) => x.function.name !== "remember");
   if (c.depth > 0 || c.mode === "plan" || workerLimit(c.settings) < 1 || !isGitProject(c.root)) t = t.filter((x) => x.function.name !== "parallel_edit");
+  if (!c.skillsOn) t = t.filter((x) => x.function.name !== "skill");
   return c.allowed ? t : [...t, ...c.mcp.flatMap((m) => m.defs())];
 }
 /** Everything changed in this session, as a unified diff (for /diff). */
@@ -73,7 +77,7 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string> }
+export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string>; /** The user has skills the AI may open by itself (the skill tool). */ skillsOn?: boolean }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
   return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false }, agents: settings.agents === false ? [] : loadAgents(resolve(root)) };
 }
@@ -255,6 +259,14 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
       case "job_stop": return stopJob(c.root, +a.id);
       case "bg_output": return a.id == null ? c.bg.list() : c.bg.output(+a.id, 4000);
       case "bg_stop": return c.bg.stop(+a.id);
+      case "skill": {
+        const m = loadSkills(c.root); const want = String(a.name || "").trim().replace(/^\//, "").toLowerCase();
+        if (!want || want === "list") return uniqueSkills(m).filter((x) => x.modelInvocable).map((x) => `- ${skillLabel(m, x)}: ${x.description.replace(/\s+/g, " ")}`).join("\n").slice(0, 30000) || "No skills.";
+        const sk = m.get(want);
+        if (!sk) return `Error: there is no skill called "${want.slice(0, 60)}". Skills: ${uniqueSkills(m).filter((x) => x.modelInvocable).map((x) => skillLabel(m, x)).join(", ") || "none"}.`;
+        if (!sk.modelInvocable) return `The skill "${want}" is only started by the user (/${want}). Do the task without it, or tell the user they can run /${want}.`;
+        return cut(`=== Skill: ${skillLabel(m, sk)} ===\n` + skillText(sk, String(a.args || ""), c.root) + "\n=== End of skill ===\nFollow it now. Run the commands it needs yourself with run_command.", 24000);
+      }
       case "web_search": {
         if (c.settings.web === false) return "Error: web tools are switched off in this project's settings.";
         const ok = (c.webOk ||= { hosts: new Set(), search: false });
@@ -314,7 +326,7 @@ export async function runCheckCommand(c: Ctx, cmd: string, secs: number): Promis
 }
 function sh(c: Ctx, cmd: string, secs: number): Promise<string> {
   return new Promise((res) => {
-    const env = cleanEnv();
+    const env = pluginEnv(c.root, cleanEnv());
     const ch = spawnCommand(cmd, c.root, env, ["ignore", "pipe", "pipe"]);
     let out = "", done = false;
     const add = (d: Buffer) => { out += d.toString(); if (out.length > 400_000) out = out.slice(-200_000); };

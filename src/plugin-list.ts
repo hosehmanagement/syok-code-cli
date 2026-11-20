@@ -128,6 +128,7 @@ export function describeBrowse(ranked: Ranked[], word = "", note = ""): string {
   if (fit.length) L.push("Fit this project:", ...fit.map(line), "");
   if (rest.length) L.push(fit.length ? "Others:" : word ? `Matching "${word}":` : "On the list:", ...rest.map(line), "");
   L.push("Install one: syok plugin add <name>     Say what you need in your own words: syok plugin find \"...\"");
+  L.push("Claude Code plugin marketplaces work too (not reviewed by Syok): syok plugin add terrylica/cc-skills   lists its plugins");
   if (note) L.push(note);
   return L.join("\n");
 }

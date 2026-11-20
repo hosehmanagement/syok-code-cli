@@ -4,7 +4,8 @@
 // A helper file can only NARROW what a helper may do. The permission mode and the questions you are asked stay the same.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { pluginDirs } from "./plugins.ts";
 import { splitFront, safeName } from "./skills.ts";
 import { READONLY, TOOLS, WEB_TOOLS } from "./tools.ts";
 
@@ -50,6 +51,8 @@ export function loadAgents(root: string, home = homedir()): Agent[] {
   const places: [string, string, RegExp][] = [
     [join(root, ".syok", "agents"), "project", /\.md$/i], [join(root, ".claude", "agents"), "project (Claude Code file)", /\.md$/i], [join(root, ".github", "agents"), "project (Copilot file)", /\.agent\.md$/i],
     [join(home, ".syok", "agents"), "home folder", /\.md$/i], [join(home, ".claude", "agents"), "home folder (Claude Code file)", /\.md$/i],
+    // Helpers that came with installed plugins come last (in Claude Code too, plugin helpers lose name clashes).
+    ...pluginDirs(root, home).map((p): [string, string, RegExp] => [join(p, "agents"), "plugin " + basename(p), /\.md$/i]),
   ];
   const out: Agent[] = []; const seen = new Set<string>();
   for (const [dir, from, re] of places) {

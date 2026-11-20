@@ -44,7 +44,8 @@ test("an installed plugin's commands really load, with the text that was written
   const { out } = built(); const s = site(out); const proj = tmpProject({}); const home = tmpProject({});
   try {
     for (const n of readdirSync(SRC)) { const r = await installFromList(proj, n, { env: s.env, home }); expect(r.ok).toBe(true); }
-    const cmds = loadCommands(proj, home); expect([...cmds.keys()].sort()).toEqual(["changelog", "ci", "commit", "explain-file", "fix-failing", "readme", "rename", "review-changes", "secrets-scan", "tests"]);
+    const cmds = loadCommands(proj, home); expect(cmds.get("git-helper:commit")).toBe(cmds.get("commit")!); // every plugin command also answers to <plugin>:<command>
+    expect([...cmds.keys()].filter((k) => !k.includes(":")).sort()).toEqual(["changelog", "ci", "commit", "explain-file", "fix-failing", "readme", "rename", "review-changes", "secrets-scan", "tests"]);
     expect(cmds.get("commit")!.body).toContain("Never push"); expect(cmds.get("commit")!.source).toBe("plugin"); expect(listPlugins(proj, home).length).toBe(readdirSync(SRC).length);
     expect(installedVersions(proj, home)["git-helper"]).toBe("1.0.0");
   } finally { s.server.stop(true); }
