@@ -12,7 +12,7 @@ import { runHooks } from "./hooks.ts";
 import { startMcp } from "./mcp.ts";
 import { langContext } from "./langs.ts";
 import { shellHint } from "./shell.ts";
-import { MUST_RUN_NUDGE } from "./skills.ts";
+import { MUST_RUN_NUDGE, loadSkills, skillCatalog } from "./skills.ts";
 import { homedir } from "node:os";
 import { summarizeHistory } from "./compactor.ts";
 import { withImages } from "./image.ts";
@@ -223,9 +223,24 @@ export async function runAgent(o: Opts): Promise<Result> {
 }
 async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s: string) => void): Promise<Result> {
   const hooks = ctx.settings.hooks || {};
-  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || (ctx.settings.general ? SYSTEM_GENERAL : SYSTEM)) + loadInstructions(ctx.root) + (ctx.depth === 0 && ctx.settings.memory !== false ? memoryPrompt(ctx.memoryDir || memoryDir(), ctx.root) : "") + (ctx.depth === 0 ? langContext(ctx.root) + shellHint() : "") + (getConfine() ? confineHint(getConfine()!) : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
+  // Skills the AI may open by itself (Claude Code does the same): their names and descriptions go into the instructions.
+  const skillsCat = ctx.depth === 0 && ctx.settings.skills !== false && !o.system ? skillCatalog(loadSkills(ctx.root)) : "";
+  ctx.skillsOn = !!skillsCat || (!!o.history && ctx.depth === 0 && ctx.settings.skills !== false && skillCatalog(loadSkills(ctx.root)) !== "");
+  const messages: Msg[] = o.history ? [...o.history] : [{ role: "system", content: (o.system || (ctx.settings.general ? SYSTEM_GENERAL : SYSTEM)) + skillsCat + loadInstructions(ctx.root) + (ctx.depth === 0 && ctx.settings.memory !== false ? memoryPrompt(ctx.memoryDir || memoryDir(), ctx.root) : "") + (ctx.depth === 0 ? langContext(ctx.root) + shellHint() : "") + (getConfine() ? confineHint(getConfine()!) : "") + (profile.systemExtra ? "\n" + profile.systemExtra : "") }];
   const planned = ctx.mode === "plan" && ctx.depth === 0 ? PLAN_NOTE : "";
-  messages.push({ role: "user", content: withImages(planned + (o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.`), o.images || []) });
+  // SessionStart (a new chat) and UserPromptSubmit (every request) hooks may add context, or refuse the request.
+  let hookCtx = "";
+  if (ctx.depth === 0 && !o.history && hooks.SessionStart?.length) {
+    const s = await runHooks(hooks.SessionStart, "SessionStart", { cwd: ctx.root }, ctx.root, "", { source: "startup" });
+    if (s.notice) log("[hook] " + s.notice); if (s.context) hookCtx += s.context + "\n";
+  }
+  if (ctx.depth === 0 && hooks.UserPromptSubmit?.length) {
+    const u = await runHooks(hooks.UserPromptSubmit, "UserPromptSubmit", { cwd: ctx.root, prompt: o.task }, ctx.root, "", { prompt: o.task });
+    if (u.notice) log("[hook] " + u.notice);
+    if (u.block) { log("[hook stopped this request] " + u.message); return { summary: "A hook stopped this request: " + (u.message || "no reason given"), steps: 0, tokens: 0, touched: [], stopped: "hook", messages, ranTests: false, commands: 0, declined: 0, routes: [], usage: emptyUsage() }; }
+    if (u.context) hookCtx += u.context + "\n";
+  }
+  messages.push({ role: "user", content: withImages(planned + (hookCtx ? "Context from the project's hooks:\n" + hookCtx.trim() + "\n\n" : "") + (o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.`), o.images || []) });
   const f = o.fetchImpl || fetch;
   let summaryFailed = false; let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0, runTries = 0; const routes: Route[] = [];
   const usage = emptyUsage(); let checkTries = 0, lastProvider = ""; let check: Result["check"];
@@ -263,7 +278,8 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
   const stopGate = async (): Promise<boolean> => {
     if (ctx.depth > 0 || !hooks.Stop?.length || stopTries >= 2) return false;
     const h = await runHooks(hooks.Stop, "Stop", { cwd: ctx.root, touched: [...ctx.touched] }, ctx.root);
-    if (!h.block) { if (h.message) log("[hook] " + h.message); return false; }
+    if (h.notice) log("[hook] " + h.notice);
+    if (!h.block) { if (h.message) log("[hook] " + h.message); if (h.context) { stopTries++; messages.push({ role: "user", content: "A Stop hook adds:\n" + h.context + "\nIf this changes anything, do it, then finish again." }); return true; } return false; }
     stopTries++; messages.push({ role: "user", content: "A Stop hook says the work is not done yet:\n" + h.message + "\nFix this, then finish again." }); log("[hook blocked finishing] " + h.message); return true;
   };
   // Before finishing: if files changed, run the project's own check once. A failure goes back to the AI (twice at most).
@@ -344,11 +360,15 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
       } else {
         log(`> ${name} ${JSON.stringify(args).slice(0, 140)}`);
         const pre = await runHooks(hooks.PreToolUse, "PreToolUse", { tool: name, args, cwd: ctx.root }, ctx.root, name);
-        if (pre.block) out = "Blocked by a hook: " + (pre.message || "no reason given");
+        if (pre.notice) log("[hook] " + pre.notice);
+        if (pre.block) out = "Blocked by a hook: " + (pre.message || "no reason given") + (pre.context ? "\n[hook] " + pre.context : "");
         else {
           out = await runTool(ctx, name, args);
-          const post = await runHooks(hooks.PostToolUse, "PostToolUse", { tool: name, args, result: out.slice(0, 2000), cwd: ctx.root }, ctx.root, name);
+          const post = await runHooks(hooks.PostToolUse, "PostToolUse", { tool: name, args, result: out.slice(0, 2000), cwd: ctx.root }, ctx.root, name, { result: out });
+          if (post.notice) log("[hook] " + post.notice);
           if (post.message) out += "\n[hook] " + post.message;
+          if (pre.context) out += "\n[hook] " + pre.context;
+          if (post.context) out += "\n[hook] " + post.context;
         }
       }
       messages.push({ role: "tool", tool_call_id: tc.id, name, content: out });

@@ -2,7 +2,7 @@
 
 Syok Code for your own computer: an AI coding agent that reads your project, edits files, runs your tests and fixes what it broke. It talks to **your own Syok AI key**, so automatic key switching (when one provider hits a limit) keeps working in the middle of a long task.
 
-Status: early (v0.20). Built for computers that are fast and stable.
+Status: early (v0.21). Built for computers that are fast and stable.
 
 ## Quick start
 1. Install (one line; you do not need to install anything else first):
@@ -166,7 +166,8 @@ In chat the same modes are `/gen`, `/translate`, `/debug`, `/explain`, `/test`. 
 
 ## Skills (v0.4)
 A skill is a `SKILL.md` file of instructions. The AI follows it and, when the skill needs commands, runs them itself.
-- Put skills in `.syok/skills/<name>/SKILL.md` (project) or `~/.syok/skills/` (all projects). Claude-style `.claude/skills/` folders work as they are.
+- Put skills in `.syok/skills/<name>/SKILL.md` (project) or `~/.syok/skills/` (all projects). Claude-style `.claude/skills/` and `~/.claude/skills/` folders work as they are.
+- Like Claude Code, the AI is shown each skill's name and description and opens a fitting one by itself (unless the skill says `disable-model-invocation: true`). Switch that off with `"skills": false` in `.syok/settings.json`; `/<skill>` still works.
 - `syok skills` lists them. `syok skill add <github link or owner/repo/path>` saves one. `syok skill <name> "what you want"` runs one. In chat: `/skills`, `/skill <name> <task>`, or `/<name> <task>`.
 - Before it starts you see the commands the skill mentions. Each command still goes through your approval (or `--mode auto`); blocked commands (sudo, wiping a drive, curl-to-shell, forced push...) stay blocked even if a skill asks.
 - A skill can list commands it needs in its header: `allowed-tools: Bash(npm test:*), Bash(git status)`. You are asked once at the start whether to allow them for that run.
@@ -186,6 +187,7 @@ Interactive terminals (programs that wait for typed input), syncing the skills y
 - **Your own commands**: .syok/commands/name.md becomes /name (`$ARGUMENTS` = what you type after it).
 - **Usage history**: `syok usage` shows what Syok Code used in the last 30 days, by day, by who really answered and by project (`--days 7`, `--all`, `--by model`, `--json`). Each AI call adds one line to `~/.syok/usage/YYYY-MM.jsonl` with the time, the chat id, the project folder, the provider and model, and the token counts. The text of your messages is never in it. Switch it off with `"usage_log": false` in `~/.syok/config.json` or `.syok/settings.json`, or `SYOK_USAGE_LOG=0`.
 - **Plugins**: `syok plugin browse` shows the Syok plugin list with the ones that fit this project first, and says why. `syok plugin find "my tests fail"` lets the AI pick from the list for what you describe. `syok plugin add git-helper` installs one by name; it is checked against the fingerprint of the reviewed copy before anything is written. The eight on the list (git-helper, test-writer, reviewer, docs-writer, bug-hunter, ci-starter, refactor-safe, security-check) hold instructions only: no hooks, no tool servers, nothing that runs on its own. `syok plugin add owner/repo` still installs any bundle from GitHub.
+- **Claude Code plugins and marketplaces** (for example [terrylica/cc-skills](https://github.com/terrylica/cc-skills), 40 plugins, 212 skills, MIT): `syok plugin add terrylica/cc-skills` lists the plugins in a marketplace; `syok plugin add terrylica/cc-skills itp link-tools` installs those (only their own files are downloaded; add `@tag` or `@commit` to pin a version). A plugin's skills, slash commands (`/itp:go` or `/go`) and helpers work as they are: `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SKILL_DIR}`, `$ARGUMENTS`, `$0`/`$1` and `` !`command` `` are understood. Its hooks (PreToolUse, PostToolUse, Stop, UserPromptSubmit, SessionStart) and tool servers run programs on your computer, so they stay **off** until you say yes (`--with-hooks`, or later `syok plugin hooks <name> on`); when on, they get Claude Code's JSON and may refuse a command, but can never lift a permission. Plugins written for one person's Mac (launchd, SwiftBar, Keychain...) still need that Mac.
 - **Pictures**: write @screenshot.png in a message, or `/image shot.png what is wrong?`.
 - **GitHub**: `syok review 12` reviews a pull request (read-only); `syok pr "title"` commits to a branch and opens a pull request after you approve.
 - **Scripts and CI**: `echo "task" | syok -p - --json`.

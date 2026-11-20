@@ -1,0 +1,47 @@
+name: Claude plugin marketplaces live test
+# The real terrylica/cc-skills marketplace (pinned) and a REAL AI using a Claude-format plugin: a skill it opens by itself,
+# ${CLAUDE_PLUGIN_ROOT}, a skill started by name and a Claude-style hook. Runs from the source and from the one-file program.
+# Uses the repository secrets SYOK_BASE_URL and SYOK_API_KEY.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model or preset"
+        default: "syok-coder"
+  pull_request:
+    paths: ['src/marketplace.ts', 'src/skills.ts', 'src/hooks.ts', 'src/commands.ts', 'src/plugins.ts', 'src/agents.ts', 'test/live/claude-market-live.sh', '.github/workflows/claude-market-live.yml']
+permissions:
+  contents: read
+jobs:
+  live:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+      SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MODEL: ${{ inputs.model || 'syok-coder' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - name: Linux, install bubblewrap and allow ordinary programs to use it
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Secrets present
+        run: if [ -z "$SYOK_BASE_URL" ] || [ -z "$SYOK_API_KEY" ]; then echo "the Syok secrets are not set"; exit 1; fi
+      - name: Live checks from the source
+        run: bash test/live/claude-market-live.sh "$PWD/src/main.ts"
+      - name: Build the one-file program
+        run: bun build src/main.ts --target=bun --minify --outfile "$RUNNER_TEMP/syok.js"
+      - name: Live checks from the one-file program
+        run: bash test/live/claude-market-live.sh "$RUNNER_TEMP/syok.js"

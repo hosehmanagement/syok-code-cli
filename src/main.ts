@@ -11,7 +11,7 @@ import { buildTask, KINDS, type Kind } from "./tasks.ts";
 import { READONLY, syncSandbox } from "./tools.ts";
 import { pickProfile } from "./profiles.ts";
 import { MODES, type Mode } from "./perm.ts";
-import { loadSkills, addSkill, preview, buildSkillTask, type Skill } from "./skills.ts";
+import { loadSkills, addSkill, preview, buildSkillTask, uniqueSkills, skillLabel, type Skill } from "./skills.ts";
 import { currentShell } from "./shell.ts";
 import { newSessionId, saveSession, loadSession, describeSessions } from "./session.ts";
 import { takeCheckpoint, rewindTo, describeCheckpoints, type Checkpoint } from "./checkpoint.ts";
@@ -99,6 +99,9 @@ Your own commands and plugins:
   syok plugin find "what you need"             say it in your own words; the AI picks from the list
   syok plugin add <name>                       install one from the list (checked against its reviewed fingerprint)
   syok plugin add <owner/repo|folder> | list | remove <name>      bundles of skills, commands and hooks
+  syok plugin add <owner/repo>                 a Claude Code plugin marketplace (for example terrylica/cc-skills): lists its plugins
+  syok plugin add <owner/repo> <name> [...]    installs those plugins from it (add @tag to pin a version; --with-hooks to switch hooks on)
+  syok plugin hooks <name> on|off              switch a plugin's hooks and tool servers on or off
 GitHub:
   syok review <pull request number or link> [--comment]   read-only review of a pull request (needs the gh program)
   syok cloud "what to do next"                              hand your work to GitHub's cloud: pushes it to a branch, opens a draft pull request and starts the @syok job there (asks first; in chat: /cloud <what to do>)
@@ -167,7 +170,23 @@ if (["plugin", "plugins", "sessions", "commands"].includes(process.argv[2] ?? ""
     const r = await L.installFromList(here, a[1], { confirm: process.stdin.isTTY ? async (q) => { const rl2 = (await import("node:readline")).createInterface({ input: process.stdin, output: process.stdout }); const ans = await new Promise<string>((ok) => rl2.question(q + " [y/N] ", ok)); rl2.close(); return /^y(es)?$/i.test(ans.trim()); } : undefined });
     console.log(r.message); process.exit(r.ok ? 0 : 2);
   }
-  else if (a[0] === "add") { const r = await addPlugin(here, a[1] || ""); console.log(r.message); process.exit(r.ok ? 0 : 2); }
+  else if (a[0] === "add") {
+    // A Claude Code marketplace (.claude-plugin/marketplace.json): list it, or install the named plugins from it.
+    // Anything else is one plugin (a GitHub repository or a folder).
+    const M = await import("./marketplace.ts");
+    const confirm = process.stdin.isTTY ? async (q: string) => { const rl2 = (await import("node:readline")).createInterface({ input: process.stdin, output: process.stdout }); const ans = await new Promise<string>((ok) => rl2.question(q + " [y/N] ", ok)); rl2.close(); return /^y(es)?$/i.test(ans.trim()); } : undefined;
+    const deps = { confirm, withHooks: has("--with-hooks") };
+    const w = M.parseWhere(a[1] || "", here);
+    if (w && (w.where.kind === "github" || existsSync(join(w.where.dir, ".claude-plugin", "marketplace.json")))) {
+      const r = await M.installFromMarket(here, a[1], a.slice(2), deps);
+      if (!r.notMarket) { console.log(r.message); process.exit(r.ok ? 0 : 2); }
+    }
+    const r = await addPlugin(here, (a[1] || "").replace(/@[\w./-]+$/, ""));
+    let msg = r.message;
+    if (r.ok && r.claude && r.name) msg = "Added plugin " + r.name + await M.adoptClaudePlugin(join(here, ".syok", "plugins", r.name), { name: r.name, from: a[1] }, deps, a[1]);
+    console.log(msg); process.exit(r.ok ? 0 : 2);
+  }
+  else if (a[0] === "hooks") { const M = await import("./marketplace.ts"); console.log(M.switchHooks(here, a[1] || "", (a[2] || "").toLowerCase() !== "off")); }
   else if (a[0] === "remove") console.log(removePlugin(here, a[1] || "") ? "Removed." : "No such plugin in this project.");
   else console.log(describePlugins(listPlugins(here)));
   process.exit(0);
@@ -419,13 +438,13 @@ const positional = (toks: string[]) => { const pos: string[] = []; for (let i = 
 function listSkills() {
   const m = loadSkills(root);
   if (!m.size) return "No skills yet. Add one:  syok skill add <github link to a SKILL.md>\nSkills live in .syok/skills/<name>/SKILL.md (Claude-style .claude/skills work too).";
-  return [...m.values()].map((s) => `  ${s.name}${s.needsRun ? "  [runs commands]" : ""}${s.source === "home" ? "  (yours, all projects)" : ""} - ${s.description}`).join("\n");
+  return uniqueSkills(m).map((s) => `  ${skillLabel(m, s)}${s.plugin ? "  (plugin " + s.plugin + ")" : ""}${s.needsRun ? "  [runs commands]" : ""}${s.source === "home" ? "  (yours, all projects)" : ""}${s.modelInvocable ? "" : "  [only when you start it]"} - ${s.description}`).join("\n") + "\nStart one with /<name> <what you want>. The AI also opens a fitting skill by itself (switch off with \"skills\": false in .syok/settings.json).";
 }
 async function runSkill(sk: Skill, request: string, hist?: Msg[]) {
   if (!JSON_OUT) console.log(preview(sk) + `\n(commands run in ${currentShell().label})\n`);
   const saved = ctx.settings;
   if (sk.allowed.length && mode !== "auto" && await ask("this skill to run these commands without asking each time (this run only): " + sk.allowed.join(", "), preview(sk))) ctx.settings = { ...saved, allow: [...(saved.allow || []), ...sk.allowed] };
-  try { return await runAgent({ root, task: buildSkillTask(sk, request), base, key, model, mode, ask, settings: ctx.settings, profile, ctx, log, history: hist, onToken, mustRun: sk.needsRun }); }
+  try { return await runAgent({ root, task: buildSkillTask(sk, request, root), base, key, model, mode, ask, settings: ctx.settings, profile, ctx, log, history: hist, onToken, mustRun: sk.needsRun }); }
   finally { ctx.settings = saved; }
 }
 function skillReport(sk: Skill, r: { commands: number; declined: number; steps: number; touched: string[] }) {
@@ -571,14 +590,14 @@ for (;;) {
     } catch (e: any) { ctx.mode = before; console.log("Error: " + e.message); }
     continue;
   }
-  const cm = /^\/([\w-]+)(?=\s|$)\s*(.*)$/.exec(line);
+  const cm = /^\/([\w:-]+)(?=\s|$)\s*(.*)$/.exec(line);
   const custom = cm ? loadCommands(root).get(cm[1].toLowerCase()) : undefined;
   if (cm && (cm[1] === "init" || cm[1] === "image" || custom)) { await turn(cm[1] === "init" ? INIT_TASK : cm[1] === "image" ? cm[2] : renderCommand(custom!, cm[2])); continue; }
   if (line === "/usage" || line === "/cost") { console.log("This session so far: " + describeUsage(sessionUsage, settings.prices) + (settings.prices ? "" : "\n(No money amount: Syok cannot know each provider's price. Add \"prices\" to .syok/settings.json to get an estimate.)")); continue; }
   if (line === "/undo") { const d = undoAll(ctx); console.log(d.length ? "Restored: " + d.join(", ") : "Nothing to undo."); if (d.length && ctx.sandboxPut) console.log([...new Set(await syncSandbox(ctx, d))].join("\n")); continue; }
   if (line === "/mode" || line.startsWith("/mode ")) { const w = line.slice(5).trim() as Mode; const nm = w || MODES[(MODES.indexOf(mode) + 1) % MODES.length]; if (!MODES.includes(nm)) { console.log("Modes: " + MODES.join(", ")); continue; } mode = nm; ctx.mode = nm; console.log("Mode: " + nm); continue; }
   if (line.startsWith("/model ")) { model = line.slice(7).trim(); console.log("Model: " + model); continue; }
-  const sm = /^\/skills?(?=\s|$)\s*(.*)$/.exec(line), sx = /^\/([\w-]+)(?=\s|$)\s*(.*)$/.exec(line);
+  const sm = /^\/skills?(?=\s|$)\s*(.*)$/.exec(line), sx = /^\/([\w:-]+)(?=\s|$)\s*(.*)$/.exec(line);
   const toks = sm ? words(sm[1]) : [];
   if (sm && (!toks.length || toks[0] === "list")) { console.log(listSkills()); continue; }
   if (sm && toks[0] === "add") { console.log((await addSkill(root, toks[1] || "")).message); continue; }

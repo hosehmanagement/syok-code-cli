@@ -1,11 +1,12 @@
 // Background jobs: long-running commands (dev servers, watchers) the AI can start, read and stop.
 import type { ChildProcess } from "node:child_process";
 import { spawnCommand, killTree, cleanEnv } from "./shell.ts";
+import { pluginEnv } from "./plugins.ts";
 interface Job { id: number; cmd: string; proc: ChildProcess; out: string; code: number | null; started: number }
 export class Bg {
   jobs = new Map<number, Job>(); n = 0;
   start(cmd: string, cwd: string): number {
-    const env = cleanEnv();
+    const env = pluginEnv(cwd, cleanEnv());
     const proc = spawnCommand(cmd, cwd, env, ["ignore", "pipe", "pipe"]);
     const j: Job = { id: ++this.n, cmd, proc, out: "", code: null, started: Date.now() };
     const add = (d: Buffer) => { j.out += d.toString(); if (j.out.length > 200_000) j.out = j.out.slice(-100_000); };
