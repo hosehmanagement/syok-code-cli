@@ -11,6 +11,8 @@ export interface Line { level: Level; name: string; detail: string; fix?: string
 export interface DoctorOpts {
   base: string; key: string; root: string; model?: string; self?: string;
   fetchImpl?: typeof fetch; has?: (program: string) => boolean; platform?: string; site?: string; timeoutMs?: number;
+  /** How doctor waits before its one retry when Syok says it is busy (tests pass a quick one). */
+  sleep?: (ms: number) => Promise<void>;
 }
 const modelsUrl = (base: string) => chatUrl(base).replace(/\/chat\/completions$/, "/models");
 /** Where a beginner finds the address and the key in Syok (kept in one place so every message says the same). */
@@ -38,10 +40,31 @@ async function timed(f: typeof fetch, url: string, init: RequestInit, ms: number
   catch (e: any) { return { err: ac.signal.aborted ? `no answer within ${Math.round(ms / 1000)} seconds` : String(e?.message || e), took: Date.now() - t0 }; }
   finally { clearTimeout(t); }
 }
+/** Syok (or a provider behind it) said "too many requests" or "busy for a moment". */
+const BUSY = new Set([429, 503]);
+/** How long to wait before the retry: the Retry-After the server asked for, between 1 and 15 seconds; 5 seconds if it gave none. */
+export function retryWait(res: Response): number {
+  const h = res.headers.get("retry-after") || ""; const n = Number(h);
+  if (h && Number.isFinite(n)) return Math.min(15000, Math.max(1000, n * 1000));
+  const d = h ? Date.parse(h) : NaN; if (Number.isFinite(d)) return Math.min(15000, Math.max(1000, d - Date.now()));
+  return 5000;
+}
+/** One request; when Syok answers "busy", wait as it asks and try exactly once more. */
+async function timedRetry(f: typeof fetch, url: string, init: RequestInit, ms: number, sleep: (ms: number) => Promise<void>): Promise<{ res?: Response; err?: string; took: number; retried: boolean }> {
+  const first = await timed(f, url, init, ms);
+  if (!first.res || !BUSY.has(first.res.status)) return { ...first, retried: false };
+  try { await first.res.body?.cancel(); } catch {}
+  await sleep(retryWait(first.res));
+  return { ...(await timed(f, url, init, ms)), retried: true };
+}
+/** The reason a server gave with its answer, short and on one line ("" if none). */
+async function reason(res: Response): Promise<string> { try { return (await res.text()).replace(/\s+/g, " ").trim().slice(0, 200); } catch { return ""; } }
+const BUSY_FIX = "This is not a problem with your address or key: Syok answered, but it or your providers are busy right now. Wait a minute and run syok doctor again. If it keeps happening, open Syok and check which provider keys have reached their limits.";
 const SETUP = "Run: syok setup   (it asks for both). Or set SYOK_BASE_URL and SYOK_API_KEY, or put {\"base\":\"...\",\"key\":\"...\"} in the file .syok/config.json in your home folder.";
 
 export async function doctor(o: DoctorOpts): Promise<{ ok: boolean; lines: Line[] }> {
   const f = o.fetchImpl || fetch, has = o.has || hasProgram, platform = o.platform || process.platform, ms = o.timeoutMs || 30000;
+  const sleep = o.sleep || ((n: number) => new Promise<void>((r) => setTimeout(r, n)));
   const lines: Line[] = []; const add = (level: Level, name: string, detail: string, fix?: string) => lines.push({ level, name, detail, ...(fix ? { fix } : {}) });
 
   const ap = addressProblem(o.base); const ks = keyShape(o.key);
@@ -53,8 +76,9 @@ export async function doctor(o: DoctorOpts): Promise<{ ok: boolean; lines: Line[
   let reached = false;
   if (!ap && o.key.trim()) {
     const auth = { authorization: "Bearer " + o.key.trim() };
-    const m = await timed(f, modelsUrl(o.base), { headers: auth }, ms);
+    const m = await timedRetry(f, modelsUrl(o.base), { headers: auth }, ms, sleep);
     if (m.err) add("fail", "Reach Syok", m.err, "Check the address and your internet connection.");
+    else if (BUSY.has(m.res!.status)) { const t = await reason(m.res!); add("fail", "Reach Syok", `Syok answered "busy" (error ${m.res!.status}${t ? ": " + t : ""}), also when asked again a few seconds later`, BUSY_FIX); }
     else if (m.res!.status === 401 || m.res!.status === 403) add("fail", "Reach Syok", `Syok answered, and refused the key (${m.res!.status})`, "Make a new key and save it with syok setup. " + WHERE_KEY + ".");
     else if (!m.res!.ok) add("fail", "Reach Syok", `the address answered with error ${m.res!.status}`, "Check the address. " + WHERE_ADDRESS + ", and save it with syok setup.");
     else {
@@ -64,8 +88,9 @@ export async function doctor(o: DoctorOpts): Promise<{ ok: boolean; lines: Line[
     }
     if (reached) {
       const model = o.model || "syok-coder";
-      const c = await timed(f, chatUrl(o.base), { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "Reply with the single word OK." }], max_tokens: 16, temperature: 0 }) }, Math.max(ms, 60000));
+      const c = await timedRetry(f, chatUrl(o.base), { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "Reply with the single word OK." }], max_tokens: 16, temperature: 0 }) }, Math.max(ms, 60000), sleep);
       if (c.err) add("fail", "AI answer", c.err, "Syok was reached but no AI answered. Check in Syok that at least one provider key is working.");
+      else if (BUSY.has(c.res!.status)) { const t = await reason(c.res!); add("fail", "AI answer", `Syok answered "busy" (error ${c.res!.status}${t ? ": " + t : ""}), also when asked again a few seconds later`, BUSY_FIX); }
       else if (!c.res!.ok) { let t = ""; try { t = (await c.res!.text()).replace(/\s+/g, " ").slice(0, 200); } catch {} add("fail", "AI answer", `error ${c.res!.status}${t ? ": " + t : ""}`, "Open Syok and check your provider keys and their limits."); }
       else {
         let text = ""; try { const j: any = await c.res!.json(); text = String(j?.choices?.[0]?.message?.content || "").trim(); } catch {}

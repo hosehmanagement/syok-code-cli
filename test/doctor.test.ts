@@ -3,7 +3,7 @@ import { test, expect } from "bun:test";
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { doctor, describeDoctor, addressProblem, keyShape } from "../src/doctor.ts";
+import { doctor, describeDoctor, addressProblem, keyShape, retryWait } from "../src/doctor.ts";
 import { tmpProject } from "./helpers.ts";
 
 const KEY = "syk_" + "a1B2c3D4e5F6g7H8i9J0k1L2";
@@ -67,7 +67,7 @@ test("each thing that can be wrong is named, with what to do", async () => {
   s = server("notsyok"); try { r = await doctor({ base: s.base, key: KEY, root: d, has: all }); expect(by(r, "Reach Syok").detail).toContain("not like Syok"); expect(r.ok).toBe(false); } finally { s.stop(); }
   s = server("down500"); try { r = await doctor({ base: s.base, key: KEY, root: d, has: all }); expect(by(r, "Reach Syok").detail).toContain("error 500"); } finally { s.stop(); }
   // Syok reached, but no AI answers
-  s = server("noai"); try { r = await doctor({ base: s.base, key: KEY, root: d, has: all }); expect(by(r, "Reach Syok").level).toBe("ok"); expect(by(r, "AI answer").level).toBe("fail"); expect(by(r, "AI answer").detail).toContain("error 429"); expect(by(r, "AI answer").detail).toContain("provider keys are at their limit"); } finally { s.stop(); }
+  s = server("noai"); try { r = await doctor({ base: s.base, key: KEY, root: d, has: all, sleep: async () => {} }); expect(by(r, "Reach Syok").level).toBe("ok"); expect(by(r, "AI answer").level).toBe("fail"); expect(by(r, "AI answer").detail).toContain("error 429"); expect(by(r, "AI answer").detail).toContain("provider keys are at their limit"); expect(s.seen.filter((x) => x.path === "/v1/chat/completions").length).toBe(2); } finally { s.stop(); }
   s = server("empty"); try { r = await doctor({ base: s.base, key: KEY, root: d, has: all }); expect(by(r, "AI answer").detail).toBe("the answer was empty"); expect(r.ok).toBe(false); } finally { s.stop(); }
   // nothing listening
   r = await doctor({ base: "http://127.0.0.1:9", key: KEY, root: d, has: all }); expect(by(r, "Reach Syok").level).toBe("fail"); expect(by(r, "Reach Syok").fix).toContain("internet");
@@ -116,4 +116,38 @@ test("doctor: an address that answers with a web page is called that, with the w
   const r = await doctor({ base: "https://syok-elsewhere.example", key: "syk_0123456789abcdef0123", root: tmpProject({}), fetchImpl: page as any, has: () => true, platform: "linux", timeoutMs: 2000 });
   const reach = r.lines.find((l) => l.name === "Reach Syok")!;
   expect(reach.level).toBe("fail"); expect(reach.detail).toContain("web page"); expect(reach.fix).toContain("Work, then API Keys");
+});
+
+test("doctor: Syok saying \"busy\" (429/503) is retried once after the wait it asks for, and never blamed on the address or key", async () => {
+  const waits: number[] = []; const sleep = async (ms: number) => { waits.push(ms); };
+  // Busy once, then fine: doctor waits as asked (Retry-After: 2) and reports Syok reached, with an AI answer.
+  let calls = 0;
+  const once = (async (url: string) => {
+    calls++;
+    if (calls === 1) return new Response("Too many requests", { status: 429, headers: { "retry-after": "2" } });
+    if (String(url).endsWith("/models")) return Response.json({ data: [{ id: "syok-coder" }] });
+    return Response.json({ choices: [{ message: { content: "OK" } }] });
+  }) as any;
+  let r = await doctor({ base: "https://syok.example", key: KEY, root: tmpProject({}), fetchImpl: once, has: all, platform: "linux", sleep });
+  expect(by(r, "Reach Syok").level).toBe("ok"); expect(by(r, "AI answer").level).toBe("ok"); expect(waits).toEqual([2000]); expect(r.ok).toBe(true);
+  // Busy every time: one retry only, then a fail that says "busy" and does not send a beginner to change a correct address.
+  waits.length = 0; let n = 0;
+  const always = (async () => { n++; return new Response("rate limited for this key", { status: 429 }); }) as any;
+  r = await doctor({ base: "https://syok.example", key: KEY, root: tmpProject({}), fetchImpl: always, has: all, platform: "linux", sleep });
+  const reach = by(r, "Reach Syok");
+  expect(n).toBe(2); expect(waits).toEqual([5000]);
+  expect(reach.level).toBe("fail"); expect(reach.detail).toContain('"busy" (error 429: rate limited for this key)');
+  expect(reach.fix).toContain("not a problem with your address or key"); expect(reach.fix).not.toContain("Check the address");
+  expect(describeDoctor(r)).not.toContain(KEY);
+  // Other errors are not retried and keep their own advice.
+  n = 0; const down = (async () => { n++; return new Response("oops", { status: 500 }); }) as any;
+  r = await doctor({ base: "https://syok.example", key: KEY, root: tmpProject({}), fetchImpl: down, has: all, platform: "linux", sleep });
+  expect(n).toBe(1); expect(by(r, "Reach Syok").fix).toContain("Check the address");
+});
+
+test("retryWait: the server's Retry-After in seconds or as a date, kept between 1 and 15 seconds; 5 seconds without one", () => {
+  const w = (h?: string) => retryWait(new Response("", { status: 429, headers: h ? { "retry-after": h } : {} }));
+  expect(w()).toBe(5000); expect(w("3")).toBe(3000); expect(w("0")).toBe(1000); expect(w("600")).toBe(15000);
+  const soon = w(new Date(Date.now() + 4000).toUTCString()); expect(soon).toBeGreaterThanOrEqual(1000); expect(soon).toBeLessThanOrEqual(5000);
+  expect(w("not a time")).toBe(5000);
 });
