@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.syokai"
-version = "0.21.1"
+version = "0.21.2"
 
 repositories {
     mavenCentral()
