@@ -195,6 +195,13 @@ jobs:
         run: |
           ls -la build/distributions
           unzip -l build/distributions/*.zip | grep -q "syok-code-jetbrains.*\.jar"
+      # The checker downloads several real editors (gigabytes, and more with every new editor release). On 20 Nov 2026 the
+      # runner's disk filled up during it ("No space left on device"). Remove big preinstalled tools this job never uses.
+      - name: Room on the disk for the editors the checker downloads
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift || true
+          df -h /
       - name: JetBrains' own checker, against real editors
         working-directory: jetbrains
         run: gradle --no-daemon verifyPlugin
