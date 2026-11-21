@@ -16,6 +16,9 @@ jobs:
         run: |
           mkdir -p out
           bun build src/main.ts --target=bun --minify --outfile out/syok.js
+          # the MIT licence notice travels with the program (line 3: the first two lines must stay "#!" and "// @bun")
+          awk -v n="// Syok Code. MIT License, Copyright (c) 2026 Syok AI. Full text: https://github.com/hosehmanagement/syok-code-cli/blob/main/LICENSE" 'NR==1{print;next} NR==2{if ($0 ~ /^\/\/ @bun/) {print; print n} else {print n; print}; next} 1' out/syok.js > out/syok.tmp && mv out/syok.tmp out/syok.js
+          grep -q "MIT License, Copyright (c) 2026 Syok AI" out/syok.js
           bun out/syok.js --help | head -n 5
           (cd out && sha256sum syok.js > syok.js.sha256 && cat syok.js.sha256)
       - name: Build the plugin list

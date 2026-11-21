@@ -192,3 +192,7 @@ Interactive terminals (programs that wait for typed input), syncing the skills y
 - **GitHub**: `syok review 12` reviews a pull request (read-only); `syok pr "title"` commits to a branch and opens a pull request after you approve.
 - **Scripts and CI**: `echo "task" | syok -p - --json`.
 - **Isolation**: dangerous commands are always blocked; for real isolation use the Daytona sandbox (`syok sandbox start owner/repo`, then `--sandbox`). There is no Docker mode. With `--sandbox`, commands and the project check run in the sandbox's copy of your GitHub repository, and every file the AI edits is copied there too (text files up to 1 MB). The sandbox starts from what is on GitHub, so push your own uncommitted changes first if the commands need them.
+
+## Licence
+
+Syok Code is open source under the [MIT License](LICENSE), Copyright (c) 2026 Syok AI. You may use, copy, change and share it, including commercially, as long as the copyright and licence notice stay with it. The Syok name and logo are not covered by the licence.
