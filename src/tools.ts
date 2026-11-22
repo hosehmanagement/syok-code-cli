@@ -18,6 +18,7 @@ import { pluginEnv } from "./plugins.ts";
 import { findSymbol, describeSymbol, outline as symbolOutline, describeOutline, readSmall } from "./symbols.ts";
 import { applyTodo, TODO_MAX_ITEMS, TODO_MAX_TEXT, type TodoItem } from "./todo.ts";
 import { peekFile, PEEK_MODES } from "./peek.ts";
+import { loadImage } from "./image.ts";
 
 /** Seconds a run_command may take: the AI's request, limited by the user's settings (default max 10 minutes, hard ceiling 24 hours). */
 export function commandTimeout(s: Settings, asked?: number): number {
@@ -55,11 +56,12 @@ export const TOOLS = [
   fn("parallel_edit", "Run two or more workers AT THE SAME TIME, each making one change in its own separate copy of the project; afterwards their changes are joined into the real project. Use it when a job splits into independent changes that touch DIFFERENT files (for example: three modules that each need the same kind of update, or a feature plus its documentation). Do not use it for changes to the same file or for steps that depend on each other: do those yourself, in order. Each worker starts with an empty memory, so every task must be complete on its own: what to change, in which files, and how to check it. A worker whose change overlaps with another's is not joined, and you are told so you can redo it. After it returns, run the project's tests on the joined result.", { tasks: { type: "array", description: "two to eight tasks", items: { type: "object", properties: { name: { type: "string", description: "a short name, for example api or docs" }, task: { type: "string", description: "complete, specific instructions" } }, required: ["name", "task"] } } }, ["tasks"]),
   fn("todo", `Your todo list for a long task with several steps. It is kept with this chat and given back to you whenever the chat is shortened, so you never lose your place. Use it when a task has 3 or more steps: action 'set' replaces the whole list (items: {id, text, status}); 'update' changes one item's status or text by id; 'list' shows it. status is pending, in_progress or done; at most one item may be in_progress at a time. Mark an item in_progress when you start it and done as soon as it is finished. At most ${TODO_MAX_ITEMS} items of ${TODO_MAX_TEXT} characters each.`, { action: { type: "string", enum: ["set", "update", "list"] }, items: { type: "array", description: "for set: the whole new list", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, status: { type: "string", enum: ["pending", "in_progress", "done"] } }, required: ["id", "text"] } }, id: { type: "string", description: "for update: the item to change" }, status: { type: "string", enum: ["pending", "in_progress", "done"] }, text: { type: "string", description: "for update: a new text" } }, ["action"]),
   fn("finish", "Call when the task is done (or cannot be done). Give a short plain summary.", { summary: { type: "string" } }, ["summary"]),
+  fn("view_image", "Look at a picture file in the project (png, jpg, jpeg, gif or webp, at most 5 MB): a screenshot, a chart or an image you made. The picture is shown to you in the next message, so you can check what it really looks like. Needs a model that can see images.", { path: { type: "string" } }, ["path"]),
   fn("skill", "Open one of the user's skills (listed in your instructions under \"Skills you can use\") and get its full instructions. Call it before doing a task the skill is for, then follow it. Optional args = the details of what the user wants, as the skill expects them.", { name: { type: "string" }, args: { type: "string" } }, ["name"]),
 ];
 
 export const WEB_TOOLS = new Set(["web_search", "web_fetch"]);
-export const READONLY = new Set(["list_files", "read_file", "search", "find_files", "find_symbol", "outline", "peek_file", "lsp", "finish", "skill"]);
+export const READONLY = new Set(["list_files", "read_file", "search", "find_files", "find_symbol", "outline", "peek_file", "lsp", "finish", "skill", "view_image"]);
 export function toolDefs(c: Ctx): any[] {
   let t: any[] = TOOLS.filter((x) => !c.allowed || c.allowed.has(x.function.name));
   if (c.depth > 0) t = t.filter((x) => x.function.name !== "delegate");
@@ -82,7 +84,7 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string>; /** The user has skills the AI may open by itself (the skill tool). */ skillsOn?: boolean; /** The main agent's todo list (saved with the chat). */ todos?: TodoItem[]; /** Set when the todo tool changed the list, so the loop can show it. */ todoChanged?: boolean; /** Workflow-file edits the user allowed (never from a project's settings); unset = blocked. */ workflowEdits?: WorkflowEdits }
+export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string>; /** The user has skills the AI may open by itself (the skill tool). */ skillsOn?: boolean; /** The main agent's todo list (saved with the chat). */ todos?: TodoItem[]; /** Set when the todo tool changed the list, so the loop can show it. */ todoChanged?: boolean; /** Workflow-file edits the user allowed (never from a project's settings); unset = blocked. */ workflowEdits?: WorkflowEdits; /** Pictures from view_image and tool servers, waiting to be shown to the AI after this step's tool results. */ images?: { label: string; url: string }[] }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
   return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false }, agents: settings.agents === false ? [] : loadAgents(resolve(root)) };
 }
@@ -132,9 +134,18 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
       const m = c.mcp.find((x) => x.name === srv);
       if (!m) return `Error: no tool server named ${srv}.`;
       if (c.mode !== "auto" && !(c.settings.allow || []).includes("mcp__" + srv) && !(await c.ask("use tool " + name, JSON.stringify(a).slice(0, 500)))) return "The user did not allow this tool.";
-      return cut(await m.call(rest.join("__"), a), c.profile.maxToolChars);
+      const pics: string[] = [];
+      const text = cut(await m.call(rest.join("__"), a, pics), c.profile.maxToolChars);
+      if (pics.length) (c.images ||= []).push(...pics.map((url) => ({ label: name, url })));
+      return text;
     }
     switch (name) {
+      case "view_image": {
+        const r = loadImage(c.root, String(a.path || ""));
+        if ("error" in r) return `Error: ${String(a.path || "")}: ${r.error}.`;
+        (c.images ||= []).push({ label: r.rel, url: r.url });
+        return `${r.rel} (${Math.max(1, Math.round(r.bytes / 1000))} KB) is shown to you as a picture in the next message.`;
+      }
       case "list_files": {
         const { abs, rel } = safePath(c, a.path);
         const es = readdirSync(abs, { withFileTypes: true }).filter((e) => !SKIP.has(e.name)).map((e) => (e.isDirectory() ? e.name + "/" : e.name)).sort();

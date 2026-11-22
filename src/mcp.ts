@@ -7,6 +7,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { cleanEnv, SECRET_ENV } from "./shell.ts";
 import { passFor } from "./mcp-auth.ts";
+import { IMAGE_MAX_BYTES, IMAGE_TYPES } from "./image.ts";
 export interface McpCfg { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>;
   /** Only for a sign-in service that does not accept apps it does not know: the id (and secret) of an app you registered there. ${NAME} in the secret is read from the environment. */
   oauth?: { client_id?: string; client_secret?: string; scope?: string } }
@@ -40,15 +41,32 @@ export class McpClient {
   defs() {
     return this.tools.map((t) => ({ type: "function", function: { name: `mcp__${this.name}__${t.name}`, description: `[${this.name}] ${t.description || t.name}`.slice(0, 600), parameters: t.inputSchema || { type: "object", properties: {} } } }));
   }
-  async call(tool: string, args: any): Promise<string> {
+  /** The result as text. Pass `images` to also collect the pictures in it (as data: addresses) for the AI to see. */
+  async call(tool: string, args: any, images?: string[]): Promise<string> {
     const r = await this.req("tools/call", { name: tool, arguments: args || {} });
-    const text = (r.content || []).map((c: any) => (c.type === "text" ? c.text : `[${c.type}]`)).join("\n");
-    return (r.isError ? "Tool error: " : "") + text;
+    return resultText(r, images);
   }
   stop() { try { this.proc.kill("SIGKILL"); } catch {} }
 }
 const toolDefsOf = (name: string, tools: any[]) => tools.map((t) => ({ type: "function", function: { name: `mcp__${name}__${t.name}`, description: `[${name}] ${t.description || t.name}`.slice(0, 600), parameters: t.inputSchema || { type: "object", properties: {} } } }));
-const resultText = (r: any) => ((r?.isError ? "Tool error: " : "") + (r?.content || []).map((c: any) => (c.type === "text" ? c.text : `[${c.type}]`)).join("\n"));
+const mb = (n: number) => (n / 1_000_000).toFixed(1) + " MB";
+/** A tool result as text. Without `images`, a picture is only named ([image]). With it, each picture block (base64 data and a
+ *  png, jpeg, gif or webp mimeType) is added to `images`, up to 5 MB in all per result; the text says plainly which were left out and why. */
+export function resultText(r: any, images?: string[]): string {
+  let used = 0;
+  const parts = (Array.isArray(r?.content) ? r.content : []).map((c: any) => {
+    if (c?.type === "text") return c.text;
+    if (c?.type !== "image" || !images || !c.mimeType) return `[${c?.type}]`; // without a type it cannot be sent as a picture: named only, as before
+    const mime = String(c.mimeType || "").toLowerCase(); const data = typeof c.data === "string" ? c.data.replace(/\s+/g, "") : "";
+    if (!IMAGE_TYPES.has(mime)) return `[image left out: its type (${mime.slice(0, 60)}) cannot be shown; only png, jpeg, gif and webp can]`;
+    if (!data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return "[image left out: its data is not valid base64]";
+    const bytes = Math.floor((data.length * 3) / 4) - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0);
+    if (used + bytes > IMAGE_MAX_BYTES) return `[image left out: it is ${mb(bytes)}, and pictures from one tool result may be at most 5 MB in all, so you cannot see this one]`;
+    used += bytes; images.push(`data:${mime};base64,${data}`);
+    return `[image ${images.length}: shown to you as a picture in the next message]`;
+  });
+  return (r?.isError ? "Tool error: " : "") + parts.join("\n");
+}
 
 /** What is wrong with a hosted server's address, or "" when it may be used. */
 export function urlProblem(url: string): string {
@@ -119,10 +137,10 @@ export class HttpMcp {
     this.tools = Array.isArray(r?.tools) ? r.tools.slice(0, 200) : [];
   }
   defs() { return toolDefsOf(this.name, this.tools); }
-  async call(tool: string, args: any): Promise<string> {
+  async call(tool: string, args: any, images?: string[]): Promise<string> {
     const once = () => this.req("tools/call", { name: tool, arguments: args || {} });
     let r: any; try { r = await once(); } catch (e: any) { if (!e?.expired) throw e; await this.start(); r = await once(); } // a forgotten session is started again, once
-    return resultText(r);
+    return resultText(r, images);
   }
   stop() { if (this.session) { const s = this.session; this.session = ""; this.fetchImpl(this.cfg.url!, { method: "DELETE", headers: { ...this.headers, ...(this.pass ? { authorization: "Bearer " + this.pass } : {}), "mcp-session-id": s } }).catch(() => {}); } }
 }
