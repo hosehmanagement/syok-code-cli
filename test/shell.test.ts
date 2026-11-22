@@ -3,6 +3,7 @@ import { pickShell, shellArgs, spawnCommand, killTree, shellHint, currentShell, 
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tmpDir } from "./helpers.ts";
 
 const win = (o: { files?: string[]; which?: Record<string, string>; env?: Record<string, string> } = {}): ShellEnv => ({
   platform: "win32",
@@ -57,7 +58,7 @@ test("the hint tells the AI which shell it has", () => {
 
 // These run a real command in the real shell of the machine running the tests (Linux, Mac or Windows).
 // The commands use small script files, not node -e "...": Windows PowerShell strips the inner double quotes.
-const dir = mkdtempSync(join(tmpdir(), "syok-sh-"));
+const dir = tmpDir("syok-sh-");
 writeFileSync(join(dir, "five.js"), "console.log(2+3)"); writeFileSync(join(dir, "exit3.js"), "process.exit(3)"); writeFileSync(join(dir, "long.js"), "setTimeout(()=>{},60000)");
 const run = (cmd: string, secs = 20) => new Promise<{ out: string; code: number | null }>((res) => {
   const p = spawnCommand(cmd, dir, process.env, ["ignore", "pipe", "pipe"]);

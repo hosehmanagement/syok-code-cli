@@ -6,7 +6,7 @@
 // Tools: syok, claude, codex, cursor; and two pseudo-tools that spend nothing: gold (applies the dataset's reference fix) and noop.
 // Options: --timeout <sec per instance, default 1800>  --out <folder, default bench/swebench/out>  --platform linux/amd64
 //          --max-spend <usd, default 5>  --cost-per-instance <usd, default 2>  --skip-install (the tool is already in the image)
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { q } from "../lib/proc.ts";
@@ -32,7 +32,11 @@ export const PRE_UNTRACKED = "git ls-files --others --exclude-standard > /tmp/sy
 /** Changes to tracked files since the base commit, plus files the tool created (not the untracked files that were already there). */
 export const diffCommand = (base: string) =>
   `git ls-files --others --exclude-standard | grep -vxF -f /tmp/syok-pre-untracked.txt | tr '\\n' '\\0' | xargs -0 -r git add -N -- 2>/dev/null; git diff --binary ${base} 2>/dev/null`;
-async function writeTmp(name: string, text: string): Promise<string> { const d = mkdtempSync(join(tmpdir(), "swebench-")); const f = join(d, name); writeFileSync(f, text); return f; }
+/** Put text into the container as a file, through a local temporary file that is removed again afterwards. */
+async function uploadText(box: Sandbox, name: string, text: string, remote: string): Promise<void> {
+  const d = mkdtempSync(join(tmpdir(), "swebench-")); const f = join(d, name);
+  try { writeFileSync(f, text); await box.upload(f, remote); } finally { rmSync(d, { recursive: true, force: true }); }
+}
 
 /** Start the instance's container, let the tool work in /testbed, and take everything it changed as a git diff. */
 export async function solveInstance(x: Instance, o: InstanceOpts): Promise<{ patch: string; report: InstanceReport }> {
@@ -49,7 +53,7 @@ export async function solveInstance(x: Instance, o: InstanceOpts): Promise<{ pat
     if (o.tool === "gold" || o.tool === "noop") {
       if (o.tool === "gold") {
         if (!x.patch) throw new Error("this dataset row has no reference patch, so the gold pseudo-tool cannot run");
-        await box.upload(await writeTmp("gold.patch", x.patch), "/tmp/gold.patch");
+        await uploadText(box, "gold.patch", x.patch, "/tmp/gold.patch");
         const t0 = Date.now(); const r = await box.exec("git apply -v /tmp/gold.patch", { cwd: TESTBED, timeoutSec: 120 });
         rep.toolExit = r.code; rep.toolSeconds = Math.round((Date.now() - t0) / 1000);
       } else rep.toolExit = 0;
@@ -85,8 +89,8 @@ export async function quickGrade(x: Instance, patch: string, o: InstanceOpts): P
   if (!patch.trim()) return { skipped: "empty patch: nothing to grade (counts as not resolved)" };
   const box = await o.backend.start(x.image, { platform: o.platform, timeoutSec: o.timeoutSec });
   try {
-    await box.upload(await writeTmp("model.patch", patch), "/tmp/model.patch");
-    await box.upload(await writeTmp("eval.sh", x.eval_script), "/tmp/eval.sh");
+    await uploadText(box, "model.patch", patch, "/tmp/model.patch");
+    await uploadText(box, "eval.sh", x.eval_script, "/tmp/eval.sh");
     // The same order of attempts as the harness (run_evaluation.py): git apply, then git apply --3way, then patch --fuzz.
     const a = await box.exec("git apply --verbose /tmp/model.patch || git apply --verbose --3way /tmp/model.patch || patch --batch --forward --fuzz=5 -p1 -i /tmp/model.patch", { cwd: TESTBED, timeoutSec: 300 });
     if (a.code !== 0) return { ...grade("", x.FAIL_TO_PASS, x.PASS_TO_PASS, x.log_parser), applied: false, note: "the patch did not apply: " + a.out.trim().slice(-300) };

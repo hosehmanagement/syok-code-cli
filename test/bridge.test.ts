@@ -3,8 +3,9 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { authOk, loadState, rotate, stateFile, publicUrl, insideRoot, makeHandler, makePublic, pair, serve, validCode, tail, OUT_CAP } from "../src/bridge.ts";
+import { tmpDir } from "./helpers.ts";
 
-const tmp = (p = "syok-br-") => mkdtempSync(join(tmpdir(), p));
+const tmp = (p = "syok-br-") => tmpDir(p);
 const SECRET = "a".repeat(64);
 const mk = (root = tmp(), env: Record<string, string | undefined> = { CODESPACE_NAME: "happy-cs-abc" }) => makeHandler({ secret: () => SECRET, root, env });
 const req = (path: string, init: RequestInit = {}, secret: string | null = SECRET) =>

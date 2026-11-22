@@ -3,7 +3,7 @@
 //   bun evals/run.ts --check                      prove every task fails before the fix and passes after it (no AI needed)
 //   bun evals/run.ts --model syok-auto --profile default [--tasks js-,py-] [--mode auto]
 // Needs SYOK_BASE_URL and SYOK_API_KEY for AI runs.
-import { cpSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -17,8 +17,11 @@ if (!existsSync(dir)) spawnSync("python3", [resolve(import.meta.dir, "make_tasks
 const filter = arg("--tasks").split(",").filter(Boolean);
 const ids = readdirSync(dir).filter((d) => !filter.length || filter.some((f) => d.startsWith(f))).sort();
 const sh = (cmd: string, cwd: string, secs = 90) => { const r = spawnSync("bash", ["-lc", cmd], { cwd, timeout: secs * 1000, encoding: "utf8" }); return { ok: r.status === 0, out: ((r.stdout || "") + (r.stderr || "")).slice(-1500) }; };
+// Every task copy is a temporary folder; all of them are removed when this script ends (also after process.exit).
+const copies: string[] = [];
+process.on("exit", () => { for (const w of copies) { try { rmSync(w, { recursive: true, force: true }); } catch {} } });
 function prep(id: string) {
-  const w = mkdtempSync(join(tmpdir(), "ev-" + id + "-"));
+  const w = mkdtempSync(join(tmpdir(), "ev-" + id + "-")); copies.push(w);
   cpSync(join(dir, id, "files"), w, { recursive: true });
   sh("git init -q && git add -A && git -c user.email=e@e -c user.name=e commit -qm init", w);
   return w;

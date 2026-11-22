@@ -12,6 +12,7 @@ import { codex } from "../bench/adapters/codex.ts";
 import { cursor } from "../bench/adapters/cursor.ts";
 import { syok } from "../bench/adapters/syok.ts";
 import { noUsage } from "../bench/adapters/types.ts";
+import { tmpDir } from "./helpers.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const put = (base: string, files: Record<string, string>) => { for (const [p, c] of Object.entries(files)) { mkdirSync(dirname(join(base, p)), { recursive: true }); writeFileSync(join(base, p), c); } };
@@ -20,7 +21,7 @@ const BUG = "function add(a, b) { return a - b; }\nmodule.exports = { add };\n";
 const FIX = "function add(a, b) { return a + b; }\nmodule.exports = { add };\n";
 /** A tiny scenario: add() is wrong; test/visible.test.js is protected; other.js has its own test that passes before. */
 function scenario(extra: Record<string, any> = {}, overlays: Record<string, Record<string, string>> = {}) {
-  const d = mkdtempSync(join(tmpdir(), "bench-sc-"));
+  const d = tmpDir("bench-sc-");
   put(join(d, "repo"), {
     "package.json": '{"type":"commonjs"}', "lib/add.js": BUG,
     "lib/other.js": "module.exports = { two: () => 2 };\n",
@@ -37,7 +38,7 @@ function scenario(extra: Record<string, any> = {}, overlays: Record<string, Reco
   }));
   return d;
 }
-const logDir = () => mkdtempSync(join(tmpdir(), "bench-logs-"));
+const logDir = () => tmpDir("bench-logs-");
 const go = (dir: string, how: string, more: Partial<Parameters<typeof runOne>[1]> = {}) => { process.env.BENCH_FAKE = how; return runOne(loadScenario(dir), { adapter: fake, toolName: "syok", pin: parsePin("claude-x"), runNo: 1, prices: {}, logDir: logDir(), ...more }); };
 afterEach(() => { delete process.env.BENCH_FAKE; delete process.env.BENCH_FAKE_SLEEP; delete process.env.BENCH_FAKE_MODEL; });
 
@@ -129,13 +130,13 @@ test("scenario files are checked: a pinned commit must be a full hash, protected
 });
 
 test("a git source is cloned and checked out at exactly the pinned commit", async () => {
-  const origin = mkdtempSync(join(tmpdir(), "bench-origin-"));
+  const origin = tmpDir("bench-origin-");
   const g = (...a: string[]) => spawnSync("git", ["-c", "user.email=a@b", "-c", "user.name=a", ...a], { cwd: origin, encoding: "utf8" });
   g("init", "-q"); writeFileSync(join(origin, "f.txt"), "one\n"); g("add", "-A"); g("commit", "-qm", "1");
   const first = g("rev-parse", "HEAD").stdout.trim();
   writeFileSync(join(origin, "f.txt"), "two\n"); g("commit", "-qam", "2");
   const d = scenario({ source: { type: "git", url: origin, commit: first } });
-  const work = mkdtempSync(join(tmpdir(), "bench-w-"));
+  const work = tmpDir("bench-w-");
   const base = await materialize(loadScenario(d), join(work, "p"));
   expect(base).toBe(first);
   expect(readFileSync(join(work, "p", "f.txt"), "utf8")).toBe("one\n");
@@ -148,7 +149,7 @@ test("the three sample scenarios are valid (fail before the fix, pass after, exi
 }, 120000);
 
 test("--dry-run runs the whole pipeline with the fake tool and writes JSON and Markdown", () => {
-  const out = mkdtempSync(join(tmpdir(), "bench-out-"));
+  const out = tmpDir("bench-out-");
   const r = spawnSync("bun", ["bench/run.ts", "--dry-run", "--tools", "syok,codex", "--only", "py-parse-duration", "--out", out], { cwd: ROOT, encoding: "utf8" });
   expect(r.status).toBe(0);
   const run = readdirSync(out).find((d) => d.endsWith("-dry-run"))!;

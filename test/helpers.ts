@@ -1,8 +1,19 @@
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+// Temporary folders made by the tests. test/cleanup.ts (loaded before every test file, see bunfig.toml) removes them when
+// each test file ends, so test runs no longer leave thousands of folders behind in the temporary folder.
+const made: string[] = [];
+/** A new empty temporary folder, removed when the current test file ends. */
+export function tmpDir(prefix = "syok-"): string { const d = mkdtempSync(join(tmpdir(), prefix)); made.push(d); return d; }
+/** Remove every temporary folder made so far (a folder still in use on Windows is left, never an error). */
+export function removeTmpDirs(): number {
+  let n = 0;
+  for (const d of made.splice(0)) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3 }); n++; } catch {} }
+  return n;
+}
 export function tmpProject(files: Record<string, string>) {
-  const d = mkdtempSync(join(tmpdir(), "syok-"));
+  const d = tmpDir("syok-");
   for (const [p, c] of Object.entries(files)) { mkdirSync(dirname(join(d, p)), { recursive: true }); writeFileSync(join(d, p), c); }
   return d;
 }
