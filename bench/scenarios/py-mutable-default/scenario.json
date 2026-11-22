@@ -1,0 +1,28 @@
+{
+  "id": "py-mutable-default",
+  "title": "From evals/make_tasks.py: py-mutable-default",
+  "source": {
+    "type": "tarball",
+    "path": "repo.tar.gz"
+  },
+  "prompt": "Bug report: add_tag() in tagger.py shares tags between different items. Fix it without changing the function's public behaviour. Run the tests when done. Do not edit the existing test files.",
+  "limits": {
+    "timeSec": 600,
+    "maxSteps": 40,
+    "maxCostUsd": 1
+  },
+  "tests": [
+    {
+      "name": "existing tests",
+      "command": "python3 -m unittest discover -s tests -p test_tagger.py"
+    }
+  ],
+  "protected": [
+    "tests/test_tagger.py"
+  ],
+  "grader": {
+    "command": "python3 -m unittest discover -s tests",
+    "files": "grader",
+    "timeSec": 120
+  }
+}

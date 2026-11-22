@@ -14,6 +14,12 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test ./test
       - run: bun evals/run.ts --check
+      # The comparison bench (bench/): every sample scenario fails before its fix and passes after it, and the whole
+      # pipeline runs end to end with the fake tool (no AI, no cost). The Docker test in test/bench-swebench.test.ts runs here too.
+      - name: Bench self-check
+        run: |
+          bun bench/run.ts --check
+          bun bench/run.ts --dry-run --tools syok,claude,codex,cursor --out "$RUNNER_TEMP/bench"
   # Windows is tested for real: the shell picker, skills, the Windows safety rules and the skill run are run on a Windows machine.
   windows:
     runs-on: windows-latest

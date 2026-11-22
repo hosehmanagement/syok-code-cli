@@ -1,3 +1,5 @@
 evals/results/
 evals/tasks/
+bench/results/
+bench/swebench/out/
 node_modules/

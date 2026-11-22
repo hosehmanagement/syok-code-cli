@@ -1,0 +1,29 @@
+{
+  "id": "js-pagination-off-by-one",
+  "title": "From evals/make_tasks.py: js-pagination-off-by-one",
+  "source": {
+    "type": "dir",
+    "path": "repo"
+  },
+  "prompt": "Users report that paginate() in lib/paginate.js returns the wrong items: page 1 should be the first page, and a page number below 1 counts as page 1. Fix the bug. Run the tests to check. Do not edit the existing test files.",
+  "limits": {
+    "timeSec": 600,
+    "maxSteps": 40,
+    "maxCostUsd": 1
+  },
+  "tests": [
+    {
+      "name": "empty list still works",
+      "command": "node --test test/empty.test.js"
+    }
+  ],
+  "protected": [
+    "test/paginate.test.js",
+    "test/empty.test.js"
+  ],
+  "grader": {
+    "command": "node --test",
+    "files": "grader",
+    "timeSec": 120
+  }
+}
