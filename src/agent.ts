@@ -15,7 +15,7 @@ import { shellHint } from "./shell.ts";
 import { MUST_RUN_NUDGE, loadSkills, skillCatalog } from "./skills.ts";
 import { homedir } from "node:os";
 import { summarizeHistory } from "./compactor.ts";
-import { withImages } from "./image.ts";
+import { withImages, TOOL_PICTURES, dropOldToolPictures } from "./image.ts";
 import { pickProfile, type Profile } from "./profiles.ts";
 import { openTodos, todoNudge, renderTodos, type TodoItem } from "./todo.ts";
 import type { Mode, Asker, Settings } from "./perm.ts";
@@ -248,7 +248,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
   const sub = async (task: string, role: string): Promise<string> => {
     const agent = ctx.agents?.find((a) => a.name === role);
     const explorer = !agent && role !== "worker";
-    const child: Ctx = { ...ctx, depth: ctx.depth + 1, allowed: agent ? agent.allowed : explorer ? READONLY : undefined };
+    const child: Ctx = { ...ctx, depth: ctx.depth + 1, allowed: agent ? agent.allowed : explorer ? READONLY : undefined, images: [] }; // its own pictures: explorers run side by side
     const r = await runAgent({ root: ctx.root, task, base: o.base, key: o.key, model, mode: ctx.mode, ask: ctx.ask, settings: ctx.settings, profile: { ...profile, maxSteps: Math.min(profile.maxSteps, 20) }, fetchImpl: f, log: (s) => log("  [" + role + "] " + s), ctx: child, system: agent ? agentSystem(agent) : explorer ? EXPLORER : WORKER, signal: o.signal });
     tokens += r.tokens; mergeUsage(usage, r.usage);
     return clip(`(${role} finished in ${r.steps} steps, ${r.stopped})\n${r.summary}`, 6000);
@@ -387,7 +387,15 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     }
     // any explorers we started but never reached must still finish before we move on
     await Promise.allSettled([...early.values()]);
+    // Pictures from view_image and tool servers: a "tool" reply can only hold text in /v1/chat/completions, so they follow
+    // all of this step's tool replies as one user message with image parts. Only the newest two such messages keep theirs.
+    const pics = ctx.images?.splice(0) || [];
     if (finished) break;
+    if (pics.length) {
+      messages.push({ role: "user", content: withImages(`${TOOL_PICTURES} ${pics.length === 1 ? "The picture" : pics.length + " pictures"} you asked for: ${pics.map((p) => p.label).join(", ")}. Look at ${pics.length === 1 ? "it" : "them"} and continue.`, pics.map((p) => p.url)) });
+      dropOldToolPictures(messages);
+      log(`(${pics.length} picture${pics.length === 1 ? "" : "s"} passed to the AI: ${pics.map((p) => p.label).join(", ")})`);
+    }
   }
   if (!stopped) { stopped = "max_steps"; summary = `Stopped after ${profile.maxSteps} steps without finishing.`; }
   return { summary, steps, tokens, touched: [...ctx.touched], stopped, messages, ranTests: ctx.ran.tests, routes, commands: ctx.ran.commands, declined: ctx.ran.declined, usage, check, todos: ctx.depth === 0 ? ctx.todos || [] : [] };

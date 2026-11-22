@@ -82,6 +82,7 @@ The workflow "cli-anything live test" does exactly this with a real AI and check
   - `sample`: evenly spaced windows of lines from the whole file. `around`: the lines around the first matches of a regular expression, with the total number of matches.
   - `columns` (csv and jsonl): field names, types, and the values of fields that have only a few different values.
   - A 300 MB log takes well under a second for `summary`, `sample` and `around`, and a few seconds for `patterns`. `read_file` now points to `peek_file` for files over 2 MB.
+- **The AI can see pictures it made**: the new `view_image` tool and pictures in tool-server results (for example Playwright browser screenshots). See "Seeing pictures (view_image and browser screenshots)" below.
 
 ## New in 0.14
 - **Parallel editing**: when a job splits into separate parts in different files, the AI can run a worker for each part at the same time, each in its own copy of the project, and join the results into your folder. It needs a git project. You are asked before the workers start (not in `--mode auto`). Up to 2 run at once by default: `--workers 4`, or `"parallel_workers": 4` in `.syok/settings.json`, changes that (0 switches it off, 8 is the most), and `syok setup` asks for your everyday number.
@@ -208,6 +209,27 @@ Interactive terminals (programs that wait for typed input), syncing the skills y
 - **GitHub**: `syok review 12` reviews a pull request (read-only); `syok pr "title"` commits to a branch and opens a pull request after you approve.
 - **Scripts and CI**: `echo "task" | syok -p - --json`.
 - **Isolation**: dangerous commands are always blocked; for real isolation use the Daytona sandbox (`syok sandbox start owner/repo`, then `--sandbox`). There is no Docker mode. With `--sandbox`, commands and the project check run in the sandbox's copy of your GitHub repository, and every file the AI edits is copied there too (text files up to 1 MB). The sandbox starts from what is on GitHub, so push your own uncommitted changes first if the commands need them.
+
+## Seeing pictures (view_image and browser screenshots)
+The AI can now look at pictures it made itself, not only the ones you attach with @file.png. This lets it check a chart it drew, a screenshot of the page it built, or an image a script produced, instead of guessing what it looks like.
+
+- **`view_image`**: a new read-only tool. The AI calls it with a file in the project (`.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`, at most 5 MB) and sees the picture on its next step. The same rules as @file.png apply: files outside the project folder (also through a link) are refused, and so are bigger files and files that are not pictures. It needs no approval (like `read_file`), works in plan mode, and helpers started with `delegate` can use it too.
+- **Pictures from tool servers (MCP)**: when a tool server answers with a picture (an `image` block with base64 data and a png, jpeg, gif or webp type), the AI sees it the same way. This works for local servers and for hosted ones. At most 5 MB of pictures are passed on per tool result; a picture over that, or of a type that cannot be shown, is left out and the AI is told so in plain words. A hosted server's whole answer may be at most 4 MB, so its pictures must be smaller than about 3 MB.
+- How it reaches the AI: a tool reply can only hold text, so the pictures follow the tool replies as one extra message with the pictures in it. Only the newest two such messages keep their pictures; older ones are replaced by a short note, so a long session does not send every screenshot again on every step.
+
+**Browser screenshots with Playwright.** Add the Playwright tool server to `.syok/settings.json` in your project (or merge the `"playwright"` entry into the `"mcpServers"` you already have):
+
+```json
+{
+  "mcpServers": {
+    "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@0.0.86", "--headless", "--isolated"] }
+  }
+}
+```
+
+It needs Node.js (for `npx`). Its tools appear as `mcp__playwright__browser_navigate`, `mcp__playwright__browser_take_screenshot` and so on; ask for example "open http://localhost:3000, take a screenshot and check the layout". Outside `--mode auto` you are asked before each tool call, unless you add `"allow": ["mcp__playwright"]`. If it says no browser is installed, install Google Chrome, or choose another browser by adding `"--browser", "firefox"` (or `webkit`, `msedge`) to `args`.
+
+**The one limit: the model must be able to see images.** Pictures are sent in the standard image format of `/v1/chat/completions`. A model that only reads text (or a provider that refuses images) cannot use them: it either ignores the picture or the request fails. Pick a model that accepts images when you want the AI to look at pictures.
 
 ## Licence
 
