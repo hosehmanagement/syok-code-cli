@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { memoryDir, addNote, forgetNote, noteProblem, tidy } from "./memory.ts";
-import { LspSet, lspTool, lspAvailable } from "./lsp.ts";
+import { LspSet, lspTool, lspAvailable, planRename, tellChanged } from "./lsp.ts";
 import { workerLimit, isGitProject } from "./parallel.ts";
 import { resolve, relative, dirname, join, sep } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -36,7 +36,7 @@ export const TOOLS = [
   fn("find_files", "Find files by name pattern, for example '**/*.test.js'.", { pattern: { type: "string" } }, ["pattern"]),
   fn("find_symbol", "Find where a function, class, type or variable is DEFINED and where it is USED, by its exact name (case-sensitive). Faster and more exact than search for names: definitions and uses come back separately with file and line. show: 'both' (default), 'definition' or 'usages'.", { name: { type: "string" }, show: { type: "string", enum: ["both", "definition", "usages"] }, path: { type: "string" } }, ["name"]),
   fn("remember", "Save one short note to your memory, which you are given again at the start of every later chat. Use it sparingly, for facts worth having next time that are NOT already in the project's instruction files or obvious from the code: how to build, test or run this project when it took effort to find out; a decision the user made; a preference the user stated. One plain sentence, at most 280 characters. Never a key, password or token. about 'project' (default) is for this project only; about 'user' is read in every project and the user is asked first. To correct a note, pass forget with a few words of the old note (and text with the new one if there is one).", { text: { type: "string", description: "the note: one sentence" }, about: { type: "string", enum: ["project", "user"] }, forget: { type: "string", description: "a few words of an existing note to remove" } }, []),
-  fn("lsp", "Exact code intelligence from the language's own tooling (a language helper is installed for this project). Use it when the answer must be exact: action 'definition' = where the name on a line is really defined (follows imports and types); 'references' = every real use of it across the project, the right ones only even when other things share the name; 'hover' = its type and documentation; 'diagnostics' = the errors and warnings the compiler reports for a file (use after editing, before running the tests); 'symbols' = what a file defines, or with query (and no path) a search for a name across the project. For definition, references and hover give path, line and symbol (the name as written on that line).", { action: { type: "string", enum: ["definition", "references", "hover", "diagnostics", "symbols"] }, path: { type: "string" }, line: { type: "integer", description: "line number, starting at 1" }, symbol: { type: "string", description: "the name on that line to ask about" }, query: { type: "string", description: "for symbols without a path: the name to search for" } }, ["action"]),
+  fn("lsp", "Exact code intelligence from the language's own tooling (a language helper is installed for this project). Use it when the answer must be exact: action 'definition' = where the name on a line is really defined (follows imports and types); 'references' = every real use of it across the project, the right ones only even when other things share the name; 'hover' = its type and documentation; 'diagnostics' = the errors and warnings the compiler reports for a file (use after editing, before running the tests); 'symbols' = what a file defines, or with query (and no path) a search for a name across the project; 'rename' = rename the name everywhere it is really used (imports and other files included, other things with the same name left alone) to new_name: it lists the files and changes, and applies them like edit_file (the user approves the whole rename at once; /undo reverts it); preview true only lists them. For definition, references, hover and rename give path, line and symbol (the name as written on that line), or line and column.", { action: { type: "string", enum: ["definition", "references", "hover", "diagnostics", "symbols", "rename"] }, path: { type: "string" }, line: { type: "integer", description: "line number, starting at 1" }, symbol: { type: "string", description: "the name on that line to ask about" }, column: { type: "integer", description: "instead of symbol: the column of the name on that line, starting at 1" }, query: { type: "string", description: "for symbols without a path: the name to search for" }, new_name: { type: "string", description: "for rename: the new name (one identifier)" }, preview: { type: "boolean", description: "for rename: only list what would change" } }, ["action"]),
   fn("outline", "List what a code file defines (functions, classes, types, methods) with line numbers, without reading the whole file. Use it before read_file on a big file, then read only the lines you need.", { path: { type: "string" } }, ["path"]),
   fn("edit_file", "Replace text in an existing file. old_text must match exactly and be unique (add surrounding lines if not). Set replace_all to change every match.", { path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" }, replace_all: { type: "boolean" } }, ["path", "old_text", "new_text"]),
   fn("write_file", "Create a new file or fully replace a file with new content.", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
@@ -187,6 +187,7 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
       case "lsp": {
         if (c.settings.lsp === false) return "Error: language helpers are switched off in the settings.";
         const set = (c.lsp ||= new LspSet(c.root, c.settings.lsp));
+        if (a.action === "rename") { try { return cut(await lspRename(c, set, a), c.profile.maxToolChars); } catch (e: any) { return "Error: " + String(e?.message || e).slice(0, 500); } }
         try { return cut(await lspTool(set, c.root, a, [...c.touched].map((f) => join(c.root, f))), c.profile.maxToolChars); }
         catch (e: any) { return "Error: " + String(e?.message || e).slice(0, 500); }
       }
@@ -301,6 +302,30 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
       default: return `Error: unknown tool ${name}.`;
     }
   } catch (e: any) { return "Error: " + (e?.message || e); }
+}
+/** lsp rename: the language helper lists every change; they are shown (and asked about once, in ask mode) as one diff, then
+ *  written the same way edit_file writes, so /undo, /diff and checkpoints include them. Read-only helpers and planning mode
+ *  (or preview: true) only get the list of what would change. */
+async function lspRename(c: Ctx, set: LspSet, a: any): Promise<string> {
+  const plan = await planRename(set, c.root, a, [...c.touched].map((f) => join(c.root, f)));
+  if (typeof plan === "string") return plan;
+  const total = plan.files.reduce((n, f) => n + f.edits, 0); const what = `${plan.from ? `"${plan.from}" ` : ""}to "${plan.to}"`;
+  const list = plan.files.map((f) => `  ${f.rel}: ${f.edits} change${f.edits === 1 ? "" : "s"}`).join("\n");
+  const head = `${total} change${total === 1 ? "" : "s"} in ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`;
+  const readOnly = c.mode === "plan" || (c.allowed && !c.allowed.has("edit_file"));
+  if (readOnly || a.preview) return `Renaming ${what} would make ${head}:\n${list}\nNothing was changed (${a.preview ? "preview only" : c.mode === "plan" ? "planning mode" : "this helper may not change files"}).`;
+  const locked = plan.files.map((f) => editBlocked(c.mode, c.workflowEdits, f.rel)).filter(Boolean); if (locked.length) return `${locked[0]} (The rename would change it.) Nothing was changed.`;
+  const diff = plan.files.map((f) => unifiedDiff(f.before, f.after, f.rel)).join("\n");
+  if (!(await allowEdit(c.mode, c.ask, `${plan.files.length} file${plan.files.length === 1 ? "" : "s"} (rename ${what})`, diff, c.workflowEdits))) return "The user did not allow this rename. Nothing was changed.";
+  // A file may have changed on the disk while the user was deciding: then nothing is written.
+  const moved = plan.files.filter((f) => { try { return readFileSync(f.abs, "utf8") !== f.before; } catch { return true; } });
+  if (moved.length) return `Error: ${moved.map((f) => f.rel).join(", ")} changed while the rename was being prepared. Nothing was changed; ask for the rename again.`;
+  const done: typeof plan.files = [];
+  try { for (const f of plan.files) { snapshot(c, f.abs, f.rel); writeFileSync(f.abs, f.after); done.push(f); c.touched.add(f.rel); } }
+  catch (e: any) { for (const f of done) { try { writeFileSync(f.abs, f.before); } catch {} } return `Error: the rename could not be written (${e?.message || e}). The files already written were put back.`; }
+  await tellChanged(set, plan.files.map((f) => f.abs));
+  let notes = ""; for (const f of plan.files) notes += (await afterEdit(c, f.abs, f.rel)).replace(/^\n(Syntax check)/, `\n${f.rel}: $1`);
+  return `Renamed ${what}: ${head}:\n${list}` + notes;
 }
 /** allow_hosts entries match the host itself and its sub-domains ("python.org" allows docs.python.org). */
 export function hostAllowed(host: string, list?: string[]): boolean {

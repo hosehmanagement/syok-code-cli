@@ -7,7 +7,7 @@
 // A helper is a program that reads the project, so when confinement is on it runs confined like the AI's commands.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { cleanEnv } from "./shell.ts";
 import { getConfine, confineArgv } from "./confine.ts";
@@ -17,7 +17,8 @@ export interface Lang { id: string; name: string; exts: string[]; ids: Record<st
 export const LANGS: Lang[] = [
   { id: "typescript", name: "TypeScript and JavaScript", exts: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"], ids: { ".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "typescriptreact", ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".jsx": "javascriptreact" }, servers: [{ command: "typescript-language-server", args: ["--stdio"] }], install: "npm install -g typescript-language-server typescript",
     // Without this, the first answers come from a quick helper that only knows one file: a definition would stop at the import line.
-    init: { tsserver: { useSyntaxServer: "never" } } },
+    // Renaming at an import must rename the name itself everywhere, not add "greet as welcome" to that one import.
+    init: { tsserver: { useSyntaxServer: "never" }, preferences: { providePrefixAndSuffixTextForRename: false } } },
   { id: "python", name: "Python", exts: [".py", ".pyi"], ids: { ".py": "python", ".pyi": "python" }, servers: [{ command: "pyright-langserver", args: ["--stdio"] }, { command: "basedpyright-langserver", args: ["--stdio"] }, { command: "pylsp" }], install: "npm install -g pyright" },
   { id: "go", name: "Go", exts: [".go"], ids: { ".go": "go" }, servers: [{ command: "gopls" }], install: "go install golang.org/x/tools/gopls@latest" },
   { id: "rust", name: "Rust", exts: [".rs"], ids: { ".rs": "rust" }, servers: [{ command: "rust-analyzer" }], install: "rustup component add rust-analyzer" },
@@ -122,7 +123,7 @@ export class LspClient {
     this.proc.stdin!.on("error", () => {});
     const rootUri = pathToFileURL(this.root).href;
     const init = await this.request("initialize", { processId: process.pid, rootUri, rootPath: this.root, workspaceFolders: [{ uri: rootUri, name: "project" }], clientInfo: { name: "syok-code" }, ...(this.lang.init ? { initializationOptions: this.lang.init } : {}),
-      capabilities: { workspace: { workspaceFolders: true, configuration: true, didChangeWatchedFiles: { dynamicRegistration: false }, symbol: {} }, textDocument: { synchronization: { didSave: false }, definition: { linkSupport: true }, references: {}, hover: { contentFormat: ["plaintext", "markdown"] }, documentSymbol: { hierarchicalDocumentSymbolSupport: true }, publishDiagnostics: {}, diagnostic: {} } } }, 45000);
+      capabilities: { workspace: { workspaceFolders: true, configuration: true, didChangeWatchedFiles: { dynamicRegistration: false }, symbol: {}, workspaceEdit: { documentChanges: true, resourceOperations: [] } }, textDocument: { synchronization: { didSave: false }, definition: { linkSupport: true }, references: {}, hover: { contentFormat: ["plaintext", "markdown"] }, documentSymbol: { hierarchicalDocumentSymbolSupport: true }, publishDiagnostics: {}, diagnostic: {}, rename: { prepareSupport: true } } } }, 45000);
     this.caps = init?.capabilities || {}; this.notify("initialized", {});
   }
   uri(abs: string) { return pathToFileURL(abs).href; }
@@ -182,11 +183,12 @@ function place(root: string, uri: string, range: any, cache: Map<string, string[
 }
 function hoverText(h: any): string { const c = h?.contents; const one = (x: any): string => (typeof x === "string" ? x : x?.value ? String(x.value) : ""); const t = Array.isArray(c) ? c.map(one).join("\n") : one(c); return t.replace(/```\w*\n?/g, "").trim().slice(0, 1500); }
 
-export interface LspArgs { action?: string; path?: string; line?: number; symbol?: string; query?: string }
+export interface LspArgs { action?: string; path?: string; line?: number; column?: number; symbol?: string; query?: string; new_name?: string; preview?: boolean }
 /** Runs one question against the right helper and returns the answer as short text for the AI. */
 export async function lspTool(set: LspSet, root: string, a: LspArgs, changed: string[] = []): Promise<string> {
   const action = String(a.action || ""); const cache = new Map<string, string[]>();
-  if (!["definition", "references", "hover", "diagnostics", "symbols"].includes(action)) return "Error: action must be one of definition, references, hover, diagnostics, symbols.";
+  if (action === "rename") return "Error: rename changes files, so it runs through the lsp tool (planRename gives the changes).";
+  if (!["definition", "references", "hover", "diagnostics", "symbols"].includes(action)) return "Error: action must be one of definition, references, hover, diagnostics, symbols, rename.";
   if (action === "symbols" && a.query && !a.path) {
     const d = detectLangs(root).find((x) => findServer(x.lang, root, set.setting)); if (!d) return "Error: no language helper is available for this project.";
     const anyFile = firstFile(root, d.lang); if (!anyFile) return "Error: no source file found to start the helper with.";
@@ -210,12 +212,8 @@ export async function lspTool(set: LspSet, root: string, a: LspArgs, changed: st
     walk(r, 0); return out.join("\n");
   }
   // The other three need a position: a line, and the name on that line to point at.
-  const lines = readFileSync(abs, "utf8").split(/\r?\n/); let ln = Math.floor(Number(a.line)) - 1; const sym = String(a.symbol || "");
-  if (!Number.isInteger(ln) || ln < 0 || ln >= lines.length) { if (!sym) return "Error: give \"line\" (the line number) and \"symbol\" (the name on that line)."; ln = lines.findIndex((l) => new RegExp(`(^|[^\\w$])${sym.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\w$]|$)`).test(l)); if (ln < 0) return `Error: "${sym}" does not appear in ${a.path}.`; }
-  let col = 0;
-  if (sym) { const m = new RegExp(`(^|[^\\w$])(${sym.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})([^\\w$]|$)`).exec(lines[ln]); if (!m) return `Error: "${sym}" is not on line ${ln + 1} of ${a.path}. That line is: ${lines[ln].trim().slice(0, 160)}`; col = m.index + m[1].length; }
-  else { col = Math.max(0, lines[ln].search(/\S/)); }
-  const pos = { textDocument: { uri }, position: { line: ln, character: col } };
+  const at = locate(abs, a); if (typeof at === "string") return at; const sym = String(a.symbol || "");
+  const pos = { textDocument: { uri }, position: at };
   if (action === "hover") { const h = await c.request("textDocument/hover", pos); const t = hoverText(h); return t || `The ${c.lang.name} helper has nothing to say about that spot.`; }
   if (action === "definition") {
     let r: any = await c.request("textDocument/definition", pos); if (r && !Array.isArray(r)) r = [r]; if (!r || !r.length) return `The ${c.lang.name} helper found no definition for ${sym || "that spot"}.`;
@@ -226,6 +224,90 @@ export async function lspTool(set: LspSet, root: string, a: LspArgs, changed: st
   const rows = [...new Set(r.map((x) => place(root, x.uri, x.range, cache)))];
   return `${rows.length} place(s) refer to ${sym || "it"} (the definition included):\n` + rows.slice(0, 80).join("\n") + (rows.length > 80 ? `\n...and ${rows.length - 80} more` : "");
 }
+/** The spot a question is about: "line" plus "symbol" (the name on that line), or "line" plus "column", or only "symbol"
+ *  (its first line in the file). Returns the position, or an error message for the AI. */
+function locate(abs: string, a: LspArgs): { line: number; character: number } | string {
+  const lines = readFileSync(abs, "utf8").split(/\r?\n/); let ln = Math.floor(Number(a.line)) - 1; const sym = String(a.symbol || "");
+  const esc = sym.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!Number.isInteger(ln) || ln < 0 || ln >= lines.length) { if (!sym) return "Error: give \"line\" (the line number) and \"symbol\" (the name on that line)."; ln = lines.findIndex((l) => new RegExp(`(^|[^\\w$])${esc}([^\\w$]|$)`).test(l)); if (ln < 0) return `Error: "${sym}" does not appear in ${a.path}.`; }
+  if (sym) { const m = new RegExp(`(^|[^\\w$])(${esc})([^\\w$]|$)`).exec(lines[ln]); if (!m) return `Error: "${sym}" is not on line ${ln + 1} of ${a.path}. That line is: ${lines[ln].trim().slice(0, 160)}`; return { line: ln, character: m.index + m[1].length }; }
+  const col = Math.floor(Number(a.column));
+  if (Number.isInteger(col) && col >= 1) { if (col > lines[ln].length) return `Error: line ${ln + 1} of ${a.path} has only ${lines[ln].length} characters.`; return { line: ln, character: col - 1 }; }
+  return { line: ln, character: Math.max(0, lines[ln].search(/\S/)) };
+}
+
+// ---- rename: the helper works out every place to change; Syok Code checks them, and the lsp tool applies them ----
+const ID_RE: Record<string, RegExp> = {
+  typescript: /^[\p{L}\p{Nl}_$][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$‌‍]*$/u,
+  python: /^[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*$/u,
+};
+const RESERVED: Record<string, Set<string>> = {
+  typescript: new Set("break case catch class const continue debugger default delete do else enum export extends false finally for function if import in instanceof new null return super switch this throw true try typeof var void while with implements interface let package private protected public static yield await".split(" ")),
+  python: new Set("False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield".split(" ")),
+};
+/** Why a new name cannot be used in this language, or "" when it can. */
+export function badName(langId: string, name: string): string {
+  const re = ID_RE[langId] || /^[\p{L}_][\p{L}\p{Nd}_]*$/u;
+  if (!name) return "give the new name in \"new_name\"";
+  if (!re.test(name)) return `"${name.slice(0, 80)}" is not a valid name (one identifier: letters, digits and _${langId === "typescript" ? " or $" : ""}, not starting with a digit, no spaces or dots)`;
+  if (RESERVED[langId]?.has(name)) return `"${name}" is a reserved word and cannot be used as a name`;
+  return "";
+}
+export interface RenameFile { abs: string; rel: string; before: string; after: string; edits: number }
+/** Applies a helper's text edits (line and character positions, counted the way JavaScript strings count) to a text. */
+export function applyTextEdits(text: string, edits: any[]): string {
+  const starts = [0]; for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+  const off = (p: any) => { const l = Math.max(0, Number(p?.line) || 0); if (l >= starts.length) return text.length; const end = l + 1 < starts.length ? starts[l + 1] - 1 : text.length; return Math.min(starts[l] + Math.max(0, Number(p?.character) || 0), end); };
+  const list = edits.map((e) => ({ s: off(e.range?.start), e: off(e.range?.end), t: String(e.newText ?? "") })).sort((x, y) => y.s - x.s || y.e - x.e);
+  for (let i = 1; i < list.length; i++) if (list[i].e > list[i - 1].s) throw new Error("the helper sent changes that overlap");
+  let out = text; for (const x of list) out = out.slice(0, x.s) + x.t + out.slice(x.e); return out;
+}
+/** Asks the helper what renaming the name at a spot would change, and returns every file with its new text, or an error for
+ *  the AI. Nothing is written here. Refuses names that are not identifiers, changes outside the project, and renames the
+ *  helper cannot do. */
+export async function planRename(set: LspSet, root: string, a: LspArgs, changed: string[] = []): Promise<{ files: RenameFile[]; from: string; to: string } | string> {
+  if (!a.path) return "Error: give the file in \"path\".";
+  const abs = resolve(root, String(a.path)); const rel0 = relative(root, abs); if (rel0.startsWith("..")) return "Error: the file is outside the project."; if (!existsSync(abs)) return `Error: ${a.path} does not exist.`;
+  const to = String(a.new_name ?? "").trim(); const bad = badName(langOf(abs)?.id || "", to); if (bad) return "Error: " + bad + ". Nothing was changed.";
+  const c = await set.forFile(abs); c.refresh(changed); const uri = c.sync(abs);
+  const rp = c.caps.renameProvider; if (!rp) return `Error: the ${c.lang.name} helper on this computer cannot rename. Nothing was changed. Find the places with lsp references, then change them with edit_file.`;
+  const at = locate(abs, a); if (typeof at === "string") return at;
+  const pos = { textDocument: { uri }, position: at }; const where = `${a.path}:${at.line + 1}`; let from = String(a.symbol || "");
+  if (typeof rp === "object" && rp.prepareProvider) {
+    let p: any; try { p = await c.request("textDocument/prepareRename", pos); } catch (e: any) { if (c.dead) throw e; return `Error: the ${c.lang.name} helper cannot rename ${from ? `"${from}"` : "what is"} at ${where}: ${String(e?.message || e).slice(0, 300)}. Nothing was changed.`; }
+    if (!p || p.defaultBehavior === false) return `Error: the ${c.lang.name} helper cannot rename anything at ${where}${from ? ` ("${from}")` : ""}. Point at a name this project defines (not a keyword, a string or a name from a library). Nothing was changed.`;
+    const r = p.range || (p.start ? p : null);
+    if (!from && r && r.start?.line === r.end?.line) from = (readFileSync(abs, "utf8").split(/\r?\n/)[r.start.line] || "").slice(r.start.character, r.end.character);
+    if (!from && p.placeholder) from = String(p.placeholder);
+  }
+  if (from && from === to) return `Error: the name is already "${to}". Nothing was changed.`;
+  const label = from ? ` "${from}"` : "";
+  let we: any; try { we = await c.request("textDocument/rename", { ...pos, newName: to }, 40000); } catch (e: any) { if (c.dead) throw e; return `Error: the ${c.lang.name} helper could not rename${label}: ${String(e?.message || e).slice(0, 300)}. Nothing was changed.`; }
+  const byUri = new Map<string, any[]>();
+  if (Array.isArray(we?.documentChanges)) for (const d of we.documentChanges) {
+    if (!d?.textDocument || !Array.isArray(d.edits)) return `Error: the ${c.lang.name} helper wants to create, rename or delete files for this, which a rename here does not do. Nothing was changed.`;
+    byUri.set(d.textDocument.uri, [...(byUri.get(d.textDocument.uri) || []), ...d.edits]);
+  }
+  else if (we?.changes) for (const [u, l] of Object.entries(we.changes)) if (Array.isArray(l) && l.length) byUri.set(u, [...(byUri.get(u) || []), ...(l as any[])]);
+  if (!byUri.size) return `Error: the ${c.lang.name} helper found nothing to rename${label} at ${where}. Nothing was changed.`;
+  const files: RenameFile[] = []; const outside: string[] = [];
+  for (const [u, edits] of byUri) {
+    let fabs = u; try { fabs = fileURLToPath(u); } catch {}
+    const rel = relative(root, fabs);
+    if (!rel || rel.startsWith("..") || isAbsolute(rel) || rel.split(sep).includes("node_modules")) { outside.push(rel.startsWith("..") || isAbsolute(rel) ? fabs : rel.split(sep).join("/")); continue; }
+    const r = rel.split(sep).join("/"); let before = "";
+    try { before = readFileSync(fabs, "utf8"); } catch { return `Error: the helper wants to change ${r}, which cannot be read. Nothing was changed.`; }
+    let after: string; try { after = applyTextEdits(before, edits); } catch (e: any) { return `Error: ${e.message}. Nothing was changed.`; }
+    if (after !== before) files.push({ abs: fabs, rel: r, before, after, edits: edits.length });
+  }
+  if (outside.length) return `Error: renaming${label} would also change files outside the project (${outside.slice(0, 5).join(", ")}${outside.length > 5 ? ", ..." : ""}), for example a library's own code. Nothing was changed. Rename only names this project defines.`;
+  if (!files.length) return `Error: the ${c.lang.name} helper's rename would change nothing. Nothing was changed.`;
+  files.sort((x, y) => x.rel.localeCompare(y.rel));
+  return { files, from, to };
+}
+/** Tells the helper about files changed on the disk (after a rename was applied), so its next answers use the new text. */
+export async function tellChanged(set: LspSet, files: string[]) { if (!files.length) return; try { const c = await set.forFile(files[0]); c.refresh(files); } catch {} }
+
 function firstFile(root: string, lang: Lang): string {
   let hit = ""; const walk = (dir: string, depth: number) => { if (hit || depth > 5) return; let names: string[] = []; try { names = readdirSync(dir); } catch { return; } for (const n of names.sort()) { if (hit) return; if (SKIP.has(n) || n.startsWith(".")) continue; const p = join(dir, n); let st; try { st = statSync(p); } catch { continue; } if (st.isDirectory()) walk(p, depth + 1); else if (lang.exts.includes(extname(n).toLowerCase())) hit = p; } };
   walk(root, 0); return hit;
