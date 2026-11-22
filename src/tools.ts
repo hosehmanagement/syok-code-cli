@@ -5,7 +5,7 @@ import { workerLimit, isGitProject } from "./parallel.ts";
 import { resolve, relative, dirname, join, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { spawnCommand, killTree, cleanEnv } from "./shell.ts";
-import { isProtected, SECRET_LIKE, allowEdit, allowCommand, type Mode, type Asker, type Settings } from "./perm.ts";
+import { editBlocked, SECRET_LIKE, allowEdit, allowCommand, type Mode, type Asker, type Settings, type WorkflowEdits } from "./perm.ts";
 import type { Profile } from "./profiles.ts";
 import { unifiedDiff } from "./diff.ts";
 import { Bg } from "./bg.ts";
@@ -80,7 +80,7 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string>; /** The user has skills the AI may open by itself (the skill tool). */ skillsOn?: boolean; /** The main agent's todo list (saved with the chat). */ todos?: TodoItem[]; /** Set when the todo tool changed the list, so the loop can show it. */ todoChanged?: boolean }
+export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string>; /** The user has skills the AI may open by itself (the skill tool). */ skillsOn?: boolean; /** The main agent's todo list (saved with the chat). */ todos?: TodoItem[]; /** Set when the todo tool changed the list, so the loop can show it. */ todoChanged?: boolean; /** Workflow-file edits the user allowed (never from a project's settings); unset = blocked. */ workflowEdits?: WorkflowEdits }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
   return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false }, agents: settings.agents === false ? [] : loadAgents(resolve(root)) };
 }
@@ -204,15 +204,15 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
       }
       case "write_file": {
         const { abs, rel } = safePath(c, a.path);
-        if (isProtected(rel)) return `Error: ${rel} is protected and cannot be changed.`;
+        const blocked = editBlocked(c.mode, c.workflowEdits, rel); if (blocked) return blocked;
         if (SECRET_LIKE.test(a.content || "")) return "Error: the content looks like a secret key or token. Not written.";
-        if (!(await allowEdit(c.mode, c.ask, rel, existsSync(abs) ? unifiedDiff(readFileSync(abs, "utf8"), a.content ?? "", rel) : "new file " + rel + "\n" + (a.content || "").slice(0, 1200)))) return "The user did not allow this change.";
+        if (!(await allowEdit(c.mode, c.ask, rel, existsSync(abs) ? unifiedDiff(readFileSync(abs, "utf8"), a.content ?? "", rel) : "new file " + rel + "\n" + (a.content || "").slice(0, 1200), c.workflowEdits))) return "The user did not allow this change.";
         snapshot(c, abs, rel); mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, a.content ?? ""); c.touched.add(rel);
         return `Wrote ${rel} (${(a.content || "").split("\n").length} lines).` + (await afterEdit(c, abs, rel));
       }
       case "edit_file": {
         const { abs, rel } = safePath(c, a.path);
-        if (isProtected(rel)) return `Error: ${rel} is protected and cannot be changed.`;
+        const blocked = editBlocked(c.mode, c.workflowEdits, rel); if (blocked) return blocked;
         if (!existsSync(abs)) return `Error: ${rel} does not exist. Use write_file to create it.`;
         if (SECRET_LIKE.test(a.new_text || "")) return "Error: the new text looks like a secret key or token. Not written.";
         const text = readFileSync(abs, "utf8"); const old = a.old_text ?? "";
@@ -226,7 +226,7 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
           if (!f) { const first = old.split("\n").find((l) => l.trim()) || ""; const at = first.trim() ? text.split("\n").findIndex((l) => l.includes(first.trim())) : -1; return `Error: old_text was not found in ${rel}.` + (at >= 0 ? ` A similar line exists at line ${at + 1}; read the file again and copy the text exactly.` : " Read the file again and copy the text exactly."); }
           next = text.slice(0, f.start) + a.new_text + text.slice(f.end);
         }
-        if (!(await allowEdit(c.mode, c.ask, rel, unifiedDiff(text, next, rel)))) return "The user did not allow this change.";
+        if (!(await allowEdit(c.mode, c.ask, rel, unifiedDiff(text, next, rel), c.workflowEdits))) return "The user did not allow this change.";
         snapshot(c, abs, rel); writeFileSync(abs, next); c.touched.add(rel);
         return `Edited ${rel}.` + (await afterEdit(c, abs, rel));
       }

@@ -56,7 +56,7 @@ export interface AgentOutcome { summary: string; stopped: string; touched: strin
 export interface ActionDeps { run: Run; agent: (task: string, o: { readOnly: boolean }) => Promise<AgentOutcome>; log: (s: string) => void; env: Record<string, string | undefined>; root: string }
 export interface ActionResult { code: number; did: string; pr?: string; comment?: string }
 const GIT_ID = ["-c", "user.name=Syok Code", "-c", "user.email=syok-code@users.noreply.github.com"];
-const NO_SECRETS = [":(exclude).env", ":(exclude).env.*", ":(exclude)*.pem", ":(exclude)*.key", ":(exclude).syok/sessions", ":(exclude).syok/jobs", ":(exclude).syok/remote"];
+const NO_SECRETS = [":(exclude).env", ":(exclude).env.*", ":(exclude)*.pem", ":(exclude)*.key", ":(exclude).syok/sessions", ":(exclude).syok/jobs", ":(exclude).syok/remote", ":(exclude).github/workflows"]; // workflow files are never committed by the cloud job
 
 export async function runAction(d: ActionDeps): Promise<ActionResult> {
   const { run, log, env, root } = d;

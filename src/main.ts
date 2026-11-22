@@ -71,7 +71,7 @@ GitHub: let people write "@syok <what to do>" in issues and pull requests (runs 
   syok github-action [--force]                 write .github/workflows/syok.yml into this project and show the two secrets to add
 Checking your setup:
   syok login                                   sign in through your browser (works on remote computers too); syok logout removes the sign-in here
-  syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks, parallel workers, memory
+  syok setup                                   a few questions, asked once: address, key, how much it asks, model, web, confinement, checks, parallel workers, memory, workflow edits
   syok setup --show | --reset                  see your saved choices | forget them (address and key stay)
   syok mcp                                     list the hosted tool servers of this project and whether you are signed in
   syok mcp login <name> | logout <name>        sign in to a hosted tool server through your browser | forget the pass (--no-browser: only print the address)
@@ -130,6 +130,8 @@ Options:
   --workers <n>         parallel editing: how many workers may change the project at once, each in its own copy (default 2, at most 8, 0 = off).
                         Needs a git project. You are asked before they start; their changes are joined into your folder and /undo takes them back.
                         "parallel_workers": 3 in .syok/settings.json makes it the default
+  --allow-workflow-edits   for this run, let the AI edit .github/workflows/*.yml: asked before each edit (with a warning),
+                        or without asking in --mode auto. Ignored inside GitHub Actions. "syok setup" can switch on the asking kind for good
   --general             general terminal mode: not only programming (scripts, data, system tasks, automation)
   --timeout <sec>       default time limit for one command (default 120)
   --max-timeout <sec>   the most one command may run (default 600, up to 86400); longer work belongs in a saved job
@@ -288,6 +290,7 @@ if (process.argv[2] === "action") {
     agent: async (task, o) => {
       const st = pluginSettings(aroot, readJson(join(aroot, ".syok", "settings.json"))); const pf = pickProfile(m, undefined, {});
       const c = makeCtx(aroot, "auto", async () => false, st, pf);
+      c.workflowEdits = { cloud: true }; // the cloud @syok job never edits workflow files, whatever the flags or settings
       c.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
       if (o.readOnly) c.allowed = READONLY;
       const res = await runAgent({ root: aroot, task, base, key, model: m, mode: "auto", settings: st, profile: pf, ctx: c, log: (x) => console.log(x) });
@@ -370,6 +373,9 @@ const ask = async (what: string, detail: string) => {
 };
 const log = (s: string) => { if (!JSON_OUT) console.log(s); };
 const ctx = makeCtx(root, mode, ask, settings, profile);
+// Workflow-file edits: only from your own config or this run's flag (never the project's settings, never in GitHub Actions).
+ctx.workflowEdits = (await import("./setup.ts")).workflowEdits(mine, { flag: has("--allow-workflow-edits"), env: process.env });
+if (ctx.workflowEdits.flag && ctx.workflowEdits.cloud) console.error("(--allow-workflow-edits is ignored inside GitHub Actions: workflow files stay protected there.)");
 if (settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, root, (s) => console.error(s));
 const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); ctx.lsp?.stopAll(); cleanupParallel(); };
 process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exit(130); });

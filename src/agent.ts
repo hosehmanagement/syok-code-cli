@@ -26,7 +26,7 @@ Rules:
 2. Make the smallest change that fully solves the task. Match the existing style. Do not reformat unrelated code.
 3. Use edit_file for changes to existing files (old_text must be exact and unique). Use write_file only for new files.
 4. After changing code, run the project's tests or build with run_command and fix failures you caused. If there are no tests, run a quick check or say so. Every edit is followed by an automatic syntax check of that file, shown in the tool result: if it says FAILED, fix that first.
-5. Never write secrets, tokens or keys into files. Do not touch .git, .env or .github/workflows.
+5. Never write secrets, tokens or keys into files. Do not touch .git, .env or key files. Files in .github/workflows are blocked unless the user switched on workflow edits; even then the user approves each edit, or allowed them for this one run on the command line (they control GitHub Actions and can read the repository's secrets), so change them only when the task needs it.
 6. If a tool says it was blocked or the user said no, do not try to get around it; explain and continue another way or finish.
 7. For big searches or reading many files, use delegate with role explorer so your own memory stays small; several explorers can run at once. Use a worker only for one self-contained change. When a job splits into two or more independent changes in different files, parallel_edit (when it is offered) runs a worker for each at the same time, each in its own copy of the project, and joins the results; afterwards run the tests on the joined result yourself. If the delegate tool lists helpers the user defined, prefer the one whose description fits the sub-task.
 8. Use bg_start for servers or watchers that keep running; never start them with run_command.
@@ -264,7 +264,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     let queue: Promise<unknown> = Promise.resolve(); // the workers' questions to the user, one at a time
     const r = await runParallel({ ctx, tasks, limit, log, runWorker: async (root, t) => {
       const askOne: Asker = (what, detail) => { const p = queue.then(() => ctx.ask(`[worker ${t.name}] ${what}`, detail)); queue = p.catch(() => {}); return p; };
-      const child = makeCtx(root, ctx.mode, askOne, ctx.settings, profile); child.depth = ctx.depth + 1; child.mcp = ctx.mcp; child.web = ctx.web; child.webOk = ctx.webOk;
+      const child = makeCtx(root, ctx.mode, askOne, ctx.settings, profile); child.depth = ctx.depth + 1; child.workflowEdits = ctx.workflowEdits; child.mcp = ctx.mcp; child.web = ctx.web; child.webOk = ctx.webOk;
       try {
         const w = await runAgent({ root, task: t.task, base: o.base, key: o.key, model, mode: ctx.mode, ask: askOne, settings: ctx.settings, profile: { ...profile, maxSteps: Math.min(profile.maxSteps, 30) }, fetchImpl: f, log: (s) => log(`  [${t.name}] ` + s), ctx: child, system: WORKER + PARALLEL_WORKER, signal: o.signal });
         tokens += w.tokens; mergeUsage(usage, w.usage); ctx.ran.commands += w.commands;

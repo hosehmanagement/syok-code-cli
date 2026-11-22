@@ -15,7 +15,7 @@ function scripted(answers: string[]) {
 }
 
 test("only choices this program understands are kept", () => {
-  expect(cleanDefaults({ mode: "auto", model: "syok-auto", web: false, confine: "no-network", checks: false, parallel_workers: 2, memory: true })).toEqual({ mode: "auto", model: "syok-auto", web: false, confine: "no-network", checks: false, parallel_workers: 2, memory: true });
+  expect(cleanDefaults({ mode: "auto", model: "syok-auto", web: false, confine: "no-network", checks: false, parallel_workers: 2, memory: true, allow_workflow_edits: true })).toEqual({ mode: "auto", model: "syok-auto", web: false, confine: "no-network", checks: false, parallel_workers: 2, memory: true, allow_workflow_edits: true });
   expect(cleanDefaults({ mode: "yolo", model: "a b; rm -rf", web: "no", confine: "maybe", checks: 0, extra: 1 })).toEqual({});
   expect(cleanDefaults(null)).toEqual({}); expect(cleanDefaults([1])).toEqual({}); expect(cleanDefaults("x")).toEqual({});
 });
@@ -38,7 +38,7 @@ test("answering everything: saved as chosen, readable by the owner alone, and th
   const r = await runSetup({ home, root: home, io: s.io, platform: "linux", env: {}, probe: () => "" });
   expect(r.saved).toBe(true);
   const saved = JSON.parse(readFileSync(configFile(home), "utf8"));
-  expect(saved).toEqual({ defaults: { mode: "accept-edits", model: "syok-auto", web: false, confine: "no-network", checks: false, parallel_workers: 2, memory: true }, base: "https://my.syok.example", key: KEY });
+  expect(saved).toEqual({ defaults: { mode: "accept-edits", model: "syok-auto", web: false, confine: "no-network", checks: false, parallel_workers: 2, memory: true, allow_workflow_edits: false }, base: "https://my.syok.example", key: KEY });
   if (process.platform !== "win32") expect(statSync(configFile(home)).mode & 0o777).toBe(0o600);
   expect(s.text()).not.toContain(KEY); expect(s.text()).not.toContain(KEY.slice(4, 14));
   expect(s.asked.filter((a) => a.secret).length).toBe(1); expect(s.asked.find((a) => a.secret)!.q).toMatch(/^Key/);
@@ -47,17 +47,17 @@ test("answering everything: saved as chosen, readable by the owner alone, and th
 });
 
 test("pressing Enter every time keeps what was there, including things setup does not know about", async () => {
-  const home = tmpProject({ ".syok/config.json": JSON.stringify({ base: "https://old.example", key: KEY, other: { keep: 1 }, defaults: { mode: "plan", model: "my-own/model", web: false, confine: true, checks: false, parallel_workers: 2, memory: true } }) });
+  const home = tmpProject({ ".syok/config.json": JSON.stringify({ base: "https://old.example", key: KEY, other: { keep: 1 }, defaults: { mode: "plan", model: "my-own/model", web: false, confine: true, checks: false, parallel_workers: 2, memory: true, allow_workflow_edits: true } }) });
   const s = scripted(["", "", "", "", "", "", ""]);
   await runSetup({ home, root: home, io: s.io, platform: "linux", env: {}, probe: () => "" });
-  expect(readConfig(home)).toEqual({ base: "https://old.example", key: KEY, other: { keep: 1 }, defaults: { mode: "plan", model: "my-own/model", web: false, confine: true, checks: false, parallel_workers: 2, memory: true } });
+  expect(readConfig(home)).toEqual({ base: "https://old.example", key: KEY, other: { keep: 1 }, defaults: { mode: "plan", model: "my-own/model", web: false, confine: true, checks: false, parallel_workers: 2, memory: true, allow_workflow_edits: true } });
   expect(s.text()).toContain("my-own/model: the one you saved"); expect(s.text()).not.toContain(KEY);
 });
 
 test("first time, Enter everywhere: the safe choices", async () => {
   const home = tmpProject({}); const s = scripted(["https://a.example", KEY]);
   await runSetup({ home, root: home, io: s.io, platform: "linux", env: {}, probe: () => "" });
-  expect(readConfig(home).defaults).toEqual({ mode: "ask", model: "syok-coder", web: true, confine: true, checks: true, parallel_workers: 2, memory: true }); // confinement is on unless you say otherwise
+  expect(readConfig(home).defaults).toEqual({ mode: "ask", model: "syok-coder", web: true, confine: true, checks: true, parallel_workers: 2, memory: true, allow_workflow_edits: false }); // confinement is on unless you say otherwise
 });
 
 test("a wrong address is asked again and never saved", async () => {
@@ -104,7 +104,7 @@ test("on Windows the question explains write protection, is off unless you say y
   const no = scripted(["https://a.example", KEY, "", "", "", ""]);
   await runSetup({ home, root: home, io: no.io, platform: "win32", env: {}, probe: () => { probed++; return ""; } });
   expect(probed).toBe(0); expect(no.text()).toContain("write protection"); expect(no.text()).toContain("can still read your other files"); expect(no.text()).toContain("syok confine undo"); expect(no.text()).toContain("WSL");
-  expect(readConfig(home).defaults).toEqual({ mode: "ask", model: "syok-coder", web: true, confine: false, checks: true, parallel_workers: 2, memory: true });
+  expect(readConfig(home).defaults).toEqual({ mode: "ask", model: "syok-coder", web: true, confine: false, checks: true, parallel_workers: 2, memory: true, allow_workflow_edits: false });
   const yes = scripted(["", "", "", "", "", "y"]);
   await runSetup({ home, root: home, io: yes.io, platform: "win32", env: {}, probe: () => { probed++; return ""; } });
   expect(probed).toBe(1); expect(readConfig(home).defaults!.confine).toBe(true); expect(yes.text()).toContain("it works");
@@ -129,13 +129,13 @@ test("environment values are pointed out, because they win over the file", async
 
 test("the @syok job is offered only where it applies, and written only on a yes", async () => {
   const home = tmpProject({}); let wrote = 0; const add = () => { wrote++; return { ok: true, message: "Wrote the file." }; };
-  const no = scripted(["https://a.example", KEY, "", "", "", "", "", "", "", ""]);
+  const no = scripted(["https://a.example", KEY, "", "", "", "", "", "", "", "", ""]);
   await runSetup({ home, root: home, io: no.io, platform: "linux", env: {}, probe: () => "", canAddJob: true, addJob: add });
   expect(wrote).toBe(0); expect(no.text()).toContain("@syok job");
-  const yes = scripted(["", "", "", "", "", "", "", "", "", "y"]);
+  const yes = scripted(["", "", "", "", "", "", "", "", "", "", "y"]); // ten questions, then the job
   await runSetup({ home, root: home, io: yes.io, platform: "linux", env: {}, probe: () => "", canAddJob: true, addJob: add });
   expect(wrote).toBe(1); expect(yes.text()).toContain("Wrote the file.");
-  const off = scripted(["", "", "", "", "", "", "", "", "", "y"]);
+  const off = scripted(["", "", "", "", "", "", "", "", "", "", "y"]);
   await runSetup({ home, root: home, io: off.io, platform: "linux", env: {}, probe: () => "", canAddJob: false, addJob: add });
   expect(wrote).toBe(1); expect(off.text()).not.toContain("@syok job");
 });
@@ -177,7 +177,7 @@ test("whole program: setup with piped answers saves, checks for real, and never 
     const r = await runMain(["setup"], home, [s.url, KEY, "1", "2", "y", process.platform === "win32" ? "n" : "3", "y"].join("\n") + "\n");
     expect(r.err).toBe(""); expect(r.out).toContain("Saved."); expect(r.out).toContain("Ready. Start with: syok"); expect(r.code).toBe(0);
     expect(r.out).not.toContain(KEY);
-    expect(readConfig(home)).toEqual({ defaults: { mode: "ask", model: "syok-auto", web: true, confine: false, checks: true, parallel_workers: 2, memory: true }, base: s.url, key: KEY });
+    expect(readConfig(home)).toEqual({ defaults: { mode: "ask", model: "syok-auto", web: true, confine: false, checks: true, parallel_workers: 2, memory: true, allow_workflow_edits: false }, base: s.url, key: KEY });
     expect(s.seen.map((x) => x.path)).toEqual(["/v1/models", "/v1/chat/completions"]); expect(s.seen[1].model).toBe("syok-auto"); // the check used the model that was chosen
 
     const show = await runMain(["setup", "--show"], home, "");
@@ -221,7 +221,7 @@ test.skipIf(process.platform !== "linux" || spawnSync("script", ["--version"]).s
     const e: any = { ...process.env, HOME: home, USERPROFILE: home, TERM: "dumb" }; delete e.SYOK_BASE_URL; delete e.SYOK_API_KEY;
     const out = await new Promise<string>((res) => { const p = spawn("script", ["-qec", `bun ${JSON.stringify(main)} setup`, "/dev/null"], { cwd: home, env: e, stdio: ["pipe", "pipe", "pipe"] }); let o = "";
       p.stdout.on("data", (d) => (o += d)); p.stderr.on("data", (d) => (o += d)); p.on("close", () => res(o));
-      const lines = [s.url, KEY, "", "", "", "", "", "", ""]; let i = 0; const t = setInterval(() => { if (i < lines.length) p.stdin.write(lines[i++] + "\r"); else { clearInterval(t); } }, 400); });
+      const lines = [s.url, KEY, "", "", "", "", "", "", "", ""]; let i = 0; const t = setInterval(() => { if (i < lines.length) p.stdin.write(lines[i++] + "\r"); else { clearInterval(t); } }, 400); });
     expect(out).toContain("Saved."); expect(out).toContain(s.url); // ordinary answers are echoed, so the terminal really was one
     expect(out).not.toContain(KEY); expect(out).not.toContain(KEY.slice(0, 12));
     expect(readConfig(home).key).toBe(KEY);
@@ -270,10 +270,24 @@ test("the eighth question: how many workers; a wrong number is asked again; a pr
 test("the ninth question: memory on or off; saying off cannot be undone by a project", async () => {
   const home = tmpProject({}); const s = scripted(["https://a.example", KEY, "", "", "", "", "", "", "n"]);
   await runSetup({ home, root: home, io: s.io, platform: "linux", env: {}, probe: () => "" });
-  expect(readConfig(home).defaults!.memory).toBe(false); expect(s.text()).toContain("9 of 9. Memory across chats"); expect(s.text()).toContain("Memory across chats   off"); expect(s.text()).toContain("Keys and passwords are never saved");
+  expect(readConfig(home).defaults!.memory).toBe(false); expect(s.text()).toContain("9 of 10. Memory across chats"); expect(s.text()).toContain("Memory across chats   off"); expect(s.text()).toContain("Keys and passwords are never saved");
   expect(applyDefaults({ memory: true }, { memory: false }).memory).toBe(false); expect(applyDefaults({}, { memory: false }).memory).toBe(false);
   expect(applyDefaults({ memory: false }, { memory: true }).memory).toBe(false); expect(applyDefaults({}, { memory: true }).memory).toBeUndefined();
   expect(cleanDefaults({ memory: "yes" })).toEqual({});
+});
+
+test("the tenth question: workflow edits are off unless you say yes, the risk is explained, and a project cannot switch them on", async () => {
+  const home = tmpProject({}); const s = scripted(["https://a.example", KEY, "", "", "", "", "", "", "", "y"]);
+  await runSetup({ home, root: home, io: s.io, platform: "linux", env: {}, probe: () => "" });
+  expect(readConfig(home).defaults!.allow_workflow_edits).toBe(true);
+  expect(s.text()).toContain("10 of 10. Workflow files"); expect(s.text()).toContain("can read your repository's secrets"); expect(s.text()).toContain("Allow it? [y/N]");
+  expect(s.text()).toContain("--allow-workflow-edits"); expect(s.text()).toContain("Workflow file edits   on");
+  const keep = scripted([]); await runSetup({ home, root: home, io: keep.io, platform: "linux", env: {}, probe: () => "" });
+  expect(readConfig(home).defaults!.allow_workflow_edits).toBe(true); expect(keep.text()).toContain("Allow it? [Y/n]"); // Enter keeps your yes
+  const no = scripted(["", "", "", "", "", "", "", "", "", "n"]); await runSetup({ home, root: home, io: no.io, platform: "linux", env: {}, probe: () => "" });
+  expect(readConfig(home).defaults!.allow_workflow_edits).toBe(false); expect(no.text()).toContain("Workflow file edits   off");
+  expect("allow_workflow_edits" in applyDefaults({ allow_workflow_edits: true } as any, { allow_workflow_edits: true })).toBe(false); // it never travels in the project's settings
+  expect(cleanDefaults({ allow_workflow_edits: "yes" })).toEqual({}); expect(cleanDefaults({ allow_workflow_edits: false })).toEqual({ allow_workflow_edits: false });
 });
 
 test("first question says where the address is, and the website address is refused with the way to the right one", async () => {

@@ -56,7 +56,7 @@ export function pickFiles(root: string, o: { maxFile?: number; limit?: number } 
     try { st = lstatSync(abs); } catch { return; }
     if (!st.isFile()) return; // folders are walked; links and special files are not sent
     const unix = rel.split(sep).join("/");
-    if (isProtected(unix) && !/(^|\/)\.github\/workflows\//.test(unix)) { out.skippedSecrets.push(unix); return; }
+    if (isProtected(unix) && !/(^|\/)\.github\/workflows\//i.test(unix)) { out.skippedSecrets.push(unix); return; }
     if (st.size > maxFile) { out.skippedBig.push(unix); return; }
     out.files.push(unix); out.bytes += st.size;
   };
