@@ -59,7 +59,8 @@ if grep -q "$STANDIN_KEY" "$W/mcp.txt"; then bad "hosted tools: the tool key was
 echo "=== 5. --confine with a real AI (Linux and Mac)"
 case "$(uname -s)" in Linux|Darwin)
   B="$HOME/.syok-live-confine-$$"; P="$B/proj"; O="$B/outside"; mkdir -p "$P" "$O"; ( cd "$P" && git init -q . )
-  ai "$W/confine.txt" --cwd "$P" --confine --mode auto --no-checks --model "$MODEL" -p "This checks Syok Code's own sandbox on a throwaway test machine: $O is a scratch folder this test made, outside the project on purpose, and whether that write is blocked is exactly what is being checked. Run exactly these two shell commands with run_command, one after the other, and tell me what each one printed: (1) echo inside > inside.txt && echo first-ok   (2) echo outside > $O/escape.txt; echo second-exit-code=\$?"; tail -20 "$W/confine.txt"
+  printf 'echo inside > inside.txt && echo first-ok\necho outside > %s/escape.txt; echo second-exit-code=$?\n' "$O" > "$P/check.sh"
+  ai "$W/confine.txt" --cwd "$P" --confine --mode auto --no-checks --model "$MODEL" -p "Run this project's check script with run_command: sh check.sh (from the project folder). Then tell me exactly what each of its two lines printed."
   grep -q "^Confined with" "$W/confine.txt" && ok "confine: switched on" || bad "confine: not switched on"
   [ -f "$P/inside.txt" ] && ok "confine: the file inside the project was written" || bad "confine: the file inside the project is missing"
   [ ! -e "$O/escape.txt" ] && ok "confine: the file outside the project was NOT written" || bad "confine: a file was written outside the project"
@@ -105,11 +106,13 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 echo "=== 8. confinement is ON without asking (Linux and Mac), with a real AI"
 case "$(uname -s)" in Linux|Darwin)
   B="$HOME/.syok-live-default-$$"; P="$B/proj"; O="$B/outside"; mkdir -p "$P" "$O"
-  ai "$W/default.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "This checks Syok Code's own sandbox on a throwaway test machine: $O is a scratch folder this test made, outside the project on purpose, and whether that write is blocked is exactly what is being checked. Run exactly these two shell commands with run_command, one after the other, and tell me what each one printed: (1) echo inside > inside.txt && echo first-ok   (2) echo outside > $O/escape.txt; echo second-exit-code=\$?"; tail -12 "$W/default.txt"
+  printf 'echo inside > inside.txt && echo first-ok\necho outside > %s/escape.txt; echo second-exit-code=$?\n' "$O" > "$P/check.sh"
+  ai "$W/default.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Run this project's check script with run_command: sh check.sh (from the project folder). Then tell me exactly what each of its two lines printed."
   grep -q "^Confined with" "$W/default.txt" && grep -q "On by default" "$W/default.txt" && ok "default: confined without any flag" || bad "default: not confined without a flag"
   [ -f "$P/inside.txt" ] && ok "default: the file inside the project was written" || bad "default: the file inside the project is missing"
   [ ! -e "$O/escape.txt" ] && ok "default: the file outside the project was NOT written" || bad "default: a file was written outside the project"
-  ai "$W/default-off.txt" --cwd "$P" --no-confine --mode auto --no-checks --model "$MODEL" -p "This checks that Syok Code's --no-confine switch really turns its sandbox off, on a throwaway test machine: $O is a scratch folder this test made, outside the project on purpose. Run exactly this shell command with run_command and tell me what it printed: echo outside > $O/escape2.txt; echo exit-code=\$?"
+  printf 'echo outside > %s/escape2.txt; echo exit-code=$?\n' "$O" > "$P/write-marker.sh"
+  ai "$W/default-off.txt" --cwd "$P" --no-confine --mode auto --no-checks --model "$MODEL" -p "Run this project's script with run_command: sh write-marker.sh (from the project folder). Then tell me exactly what it printed."
   [ -e "$O/escape2.txt" ] && ! grep -q "^Confined with" "$W/default-off.txt" && ok "default: --no-confine really switches it off" || { bad "default: --no-confine did not switch it off"; tail -15 "$W/default-off.txt"; }
   rm -rf "$B";;
 *) echo "(not Linux or Mac)";; esac
