@@ -24,6 +24,7 @@ import { sandboxCall, sandboxExec, sandboxPut } from "./sandbox.ts";
 import { runJobRunner, describeJobs, jobLog, stopJob } from "./jobs.ts";
 import { selfUpdate, sha256 } from "./update.ts";
 import { cleanupParallel } from "./parallel.ts";
+import { renderTodos } from "./todo.ts";
 
 function arg(n: string, d = "") { const i = process.argv.indexOf(n); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; }
 const has = (n: string) => process.argv.includes(n);
@@ -89,7 +90,7 @@ Codespace link (lets the Syok website run commands in your own GitHub Codespace)
 Chats, plans and checkpoints:
   syok --continue | --resume [number|id]   pick up a saved chat (every chat is saved in .syok/sessions); syok sessions lists them
   --mode plan           planning only: it explores and writes a plan, and nothing changes until you approve
-  In chat: /plan <task>  /compact [focus]  /resume [n]  /sessions  /checkpoint [name]  /checkpoints  /rewind [n]  /init  /image <file> <question>  (or write @shot.png in a message)
+  In chat: /plan <task>  /compact [focus]  /todo  /resume [n]  /sessions  /checkpoint [name]  /checkpoints  /rewind [n]  /init  /image <file> <question>  (or write @shot.png in a message)
 Your own helpers (custom agents):
   .syok/agents/<name>.md   a helper with its own instructions and tools ("tools: read, search" makes it read-only); syok agents lists them
   files made for Claude Code (.claude/agents) and GitHub Copilot (.github/agents/*.agent.md) are used as they are
@@ -411,8 +412,9 @@ let sessionId = resumed?.id || newSessionId();
 { const U = await import("./usage.ts"); U.setUsageContext({ session: sessionId, project: root, on: settings.usage_log !== false && cfg.usage_log !== false && (cfg.defaults || {}).usage_log !== false }); }
 if (resumed && !has("--model") && resumed.model) model = resumed.model;
 let history: Msg[] | undefined = resumed?.messages;
+ctx.todos = resumed?.todos; // the AI's todo list comes back with the chat
 const cps: Checkpoint[] = [];
-const persist = () => { if (history?.length) { try { saveSession(root, { id: sessionId, model, mode, messages: history }); } catch {} } };
+const persist = () => { if (history?.length) { try { saveSession(root, { id: sessionId, model, mode, messages: history, todos: ctx.todos }); } catch {} } };
 const INIT_TASK = "Explore this project and create SYOK.md in the project root for future sessions: what the project is, how to build and test it (exact commands), the folder layout, code style rules you can see, and anything easy to get wrong. Keep it under 60 lines and do not invent facts. If SYOK.md already exists, improve it instead.";
 async function turn(text: string) {
   const im = extractImages(root, text); im.notes.forEach((n) => console.log("(" + n + ")"));
@@ -518,7 +520,7 @@ if (prompt) {
   const im = extractImages(root, prompt); im.notes.forEach((n) => console.error("(" + n + ")"));
   const r = await runAgent({ root, task: im.text, images: im.images, base, key, model, mode, ask, settings, profile, ctx, log, history, onToken });
   history = r.messages; lastSummary = r.summary || lastSummary; persist();
-  if (JSON_OUT) console.log(JSON.stringify({ summary: r.summary, session: sessionId, steps: r.steps, tokens: r.tokens, touched: r.touched, stopped: r.stopped, ranTests: r.ranTests, commands: r.commands, declined: r.declined, usage: r.usage, check: r.check ?? null }));
+  if (JSON_OUT) console.log(JSON.stringify({ summary: r.summary, session: sessionId, steps: r.steps, tokens: r.tokens, touched: r.touched, stopped: r.stopped, ranTests: r.ranTests, commands: r.commands, declined: r.declined, usage: r.usage, check: r.check ?? null, todos: ctx.todos || [] }));
   else console.log("\n" + r.summary + "\n" + report(r));
   if (!stay) { rl?.close(); process.exit(r.stopped === "finished" || r.stopped === "answered" ? 0 : 1); }
   ctx.allowed = undefined;
@@ -549,13 +551,14 @@ for (;;) {
   if (line === "/agents") { const { describeAgents } = await import("./agents.ts"); console.log(describeAgents(ctx.agents || [])); continue; }
   if (line === "/diff") { const d = sessionDiff(ctx); console.log(d ? colorize(d) : "No changes yet."); continue; }
   if (line === "/jobs") { console.log(ctx.bg.list() + "\nSaved jobs (keep running after you exit):\n" + describeJobs(root)); continue; }
+  if (line === "/todo" || line === "/todos") { console.log(ctx.todos?.length ? renderTodos(ctx.todos) : "No todo list in this chat yet. The AI makes one for long tasks with several steps."); continue; }
   if (line === "/sessions") { console.log(describeSessions(root)); continue; }
   if (line === "/resume" || line.startsWith("/resume ")) {
     const ref = line.slice(7).trim();
     if (!ref) { console.log(describeSessions(root) + "\nType /resume <number> to open one."); continue; }
     const s2 = loadSession(root, ref);
     if (!s2) { console.log("No such chat."); continue; }
-    history = s2.messages; sessionId = s2.id; (await import("./usage.ts")).setUsageContext({ session: sessionId }); if (s2.model) model = s2.model; console.log("Continuing: " + s2.title); continue;
+    history = s2.messages; sessionId = s2.id; ctx.todos = s2.todos; (await import("./usage.ts")).setUsageContext({ session: sessionId }); if (s2.model) model = s2.model; console.log("Continuing: " + s2.title); continue;
   }
   if (line === "/plugins") { console.log(describePlugins(listPlugins(root))); continue; }
   if (line === "/commands") { console.log(describeCommands(loadCommands(root))); continue; }
@@ -571,7 +574,7 @@ for (;;) {
   }
   if (line === "/compact" || line.startsWith("/compact ")) {
     if (!history || history.length < 8) { console.log("The chat is still short; nothing to compact."); continue; }
-    try { const sm2 = await summarizeHistory(history, (p) => askModel(base, key, model, p), { focus: line.slice(8).trim() }); history = sm2.messages; persist(); console.log(sm2.removed ? "Summarized " + sm2.removed + " older messages." : "Nothing to summarize yet."); } catch (e: any) { console.log("Error: " + e.message); }
+    try { const sm2 = await summarizeHistory(history, (p) => askModel(base, key, model, p), { focus: line.slice(8).trim(), todos: ctx.todos }); history = sm2.messages; persist(); console.log(sm2.removed ? "Summarized " + sm2.removed + " older messages." : "Nothing to summarize yet."); } catch (e: any) { console.log("Error: " + e.message); }
     continue;
   }
   if (line === "/plan" || line.startsWith("/plan ")) {

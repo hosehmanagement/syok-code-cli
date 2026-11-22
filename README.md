@@ -67,6 +67,9 @@ The folder `vscode/` holds a small VS Code extension. It adds "Syok Code" comman
 
 The workflow "cli-anything live test" does exactly this with a real AI and checks the PDF it made.
 
+## New in 0.22
+- **Todo list for long tasks**: the AI keeps its own checklist with the `todo` tool (at most one step in progress at a time, up to 50 short steps). You see the checklist whenever it changes, and `/todo` in the chat shows it. It is saved with the chat, so `--continue` and `--resume` bring it back, and after the chat is shortened (automatically or with `/compact`) the list is put back word for word right after the summary, so the AI never loses its place. If the AI tries to finish with steps still open, it is sent back once; a second finish is accepted and the result says which steps were left open. `--json` output includes the final list (`todos`). Helpers (explorers and workers) do not get the tool.
+
 ## New in 0.14
 - **Parallel editing**: when a job splits into separate parts in different files, the AI can run a worker for each part at the same time, each in its own copy of the project, and join the results into your folder. It needs a git project. You are asked before the workers start (not in `--mode auto`). Up to 2 run at once by default: `--workers 4`, or `"parallel_workers": 4` in `.syok/settings.json`, changes that (0 switches it off, 8 is the most), and `syok setup` asks for your everyday number.
   - Your branch, your commits and your staging area are not touched: the joined changes arrive as ordinary edited files, and `/undo` takes them back.

@@ -1,4 +1,5 @@
 import type { Msg } from "./agent.ts";
+import { todoReminder, type TodoItem } from "./todo.ts";
 
 export type Ask = (prompt: string) => Promise<string>;
 const flat = (m: Msg): string => {
@@ -12,7 +13,7 @@ export function cutPoint(messages: Msg[], keepTail: number): number {
   return -1;
 }
 /** Replace the old middle of a long chat by one short summary written by the AI. The system message and the newest messages stay as they are. */
-export async function summarizeHistory(messages: Msg[], ask: Ask, o: { keepTail?: number; focus?: string } = {}): Promise<{ messages: Msg[]; removed: number }> {
+export async function summarizeHistory(messages: Msg[], ask: Ask, o: { keepTail?: number; focus?: string; todos?: TodoItem[] } = {}): Promise<{ messages: Msg[]; removed: number }> {
   const i = cutPoint(messages, o.keepTail ?? 6);
   if (i < 2) return { messages, removed: 0 };
   const old = messages.slice(1, i);
@@ -20,5 +21,7 @@ export async function summarizeHistory(messages: Msg[], ask: Ask, o: { keepTail?
   const prompt = "Summarize this coding-assistant conversation so the work can continue from your summary alone. Keep: the user's goal, decisions made, files created or changed (with paths), commands run and their results, errors still open, and what remains to do. Be specific and short (under 350 words)." + (o.focus ? "\nPay special attention to: " + o.focus : "") + "\n\nConversation:\n" + transcript;
   const s = (await ask(prompt)).trim();
   if (!s) return { messages, removed: 0 };
-  return { messages: [messages[0], { role: "user", content: "[Summary of the earlier conversation]\n" + s }, { role: "assistant", content: "Understood. I will continue from this summary." }, ...messages.slice(i)], removed: old.length };
+  // The todo list goes back in word for word, right after the summary: a summary may drop steps, the list must not.
+  const plan: Msg[] = o.todos?.length ? [{ role: "user", content: todoReminder(o.todos) }, { role: "assistant", content: "Understood. I will continue from my todo list." }] : [];
+  return { messages: [messages[0], { role: "user", content: "[Summary of the earlier conversation]\n" + s }, { role: "assistant", content: "Understood. I will continue from this summary." }, ...plan, ...messages.slice(i)], removed: old.length };
 }

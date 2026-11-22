@@ -1,9 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Msg } from "./agent.ts";
+import { loadTodos, type TodoItem } from "./todo.ts";
 
 /** A saved chat, so work can continue tomorrow (syok --continue, /resume). Stored in <project>/.syok/sessions. */
-export interface Session { id: string; model: string; mode: string; updated: string; title: string; messages: Msg[] }
+export interface Session { id: string; model: string; mode: string; updated: string; title: string; messages: Msg[]; /** The AI's todo list for this chat, if it kept one. */ todos?: TodoItem[] }
 const dirOf = (root: string) => join(root, ".syok", "sessions");
 export function newSessionId(): string { return new Date().toISOString().replace(/\D/g, "").slice(0, 14) + "-" + Math.random().toString(36).slice(2, 6); }
 export function titleOf(messages: Msg[]): string {
@@ -11,8 +12,9 @@ export function titleOf(messages: Msg[]): string {
   const t = typeof u?.content === "string" ? u.content : Array.isArray(u?.content) ? String(u.content.find((p: any) => p.type === "text")?.text || "") : "";
   return t.replace(/^Task:\s*/, "").replace(/\s+/g, " ").replace(/\s*The project is in the current folder\.?$/, "").trim().slice(0, 70) || "(empty)";
 }
-export function saveSession(root: string, s: { id: string; model: string; mode: string; messages: Msg[]; title?: string }): Session {
+export function saveSession(root: string, s: { id: string; model: string; mode: string; messages: Msg[]; title?: string; todos?: TodoItem[] }): Session {
   const full: Session = { ...s, title: s.title || titleOf(s.messages), updated: new Date().toISOString() };
+  if (!full.todos?.length) delete full.todos;
   mkdirSync(dirOf(root), { recursive: true });
   writeFileSync(join(dirOf(root), s.id + ".json"), JSON.stringify(full));
   return full;
@@ -34,7 +36,7 @@ export function loadSession(root: string, ref?: string): Session | null {
   else if (/^\d{1,3}$/.test(ref)) hit = all[+ref - 1];
   else hit = all.find((s) => s.id === ref) || all.find((s) => s.id.startsWith(ref));
   if (!hit) return null;
-  try { return JSON.parse(readFileSync(join(dirOf(root), hit.id + ".json"), "utf8")); } catch { return null; }
+  try { const s = JSON.parse(readFileSync(join(dirOf(root), hit.id + ".json"), "utf8")); s.todos = loadTodos(s.todos); if (!s.todos) delete s.todos; return s; } catch { return null; }
 }
 export function describeSessions(root: string): string {
   const all = listSessions(root);
