@@ -83,6 +83,12 @@ The workflow "cli-anything live test" does exactly this with a real AI and check
   - `columns` (csv and jsonl): field names, types, and the values of fields that have only a few different values.
   - A 300 MB log takes well under a second for `summary`, `sample` and `around`, and a few seconds for `patterns`. `read_file` now points to `peek_file` for files over 2 MB.
 - **The AI can see pictures it made**: the new `view_image` tool and pictures in tool-server results (for example Playwright browser screenshots). See "Seeing pictures (view_image and browser screenshots)" below.
+- **Interactive terminals**: the AI can now drive programs that wait for typed input: `python -m pdb`, `gdb`, a REPL (python, node, irb...), `npm init`, installers that ask questions, ssh prompts. It starts one with `pty_start`, types with `pty_send` (key names such as `<Enter>`, `<Tab>`, `<Up>`, `<Ctrl-C>`, `<Ctrl-D>` work), reads what came back with `pty_read` (plain text: colours and cursor codes removed, with "still running" or "exited with code N") and stops it with `pty_stop`. It uses Bun's own pseudo-terminals, so the program sees a real terminal.
+  - **Safety**: the start command passes the same checks as `run_command` (blocked commands refused, your approval in ask mode, read-only plan mode has no terminals), runs inside the same confinement (`--confine`) and without your keys in its environment. In ask mode you approve the start once; what the AI then types is not asked again, but it is checked: a blocked command (sudo, `rm -rf /`, curl into a shell, forced push...), anything that looks like a key or token, and anything that would open a shell is refused and never reaches the terminal.
+  - **Plain shells are refused**: `bash`, `sh`, `zsh`, `fish`, `powershell`, `cmd` and the like (also through `env`, `exec`, `docker exec`, `script`, `tmux`, `su`, `nix-shell`, `pty.spawn`...). Checking every line typed into a shell cannot be made watertight (a shell can spell a command in endless ways), and an approved shell would skip your approval of each command. Shell commands go through `run_command`; a script that asks questions (`bash install.sh`) is fine.
+  - **Limits**: at most 3 terminals at once; each keeps up to 200 000 characters of unread output (older output is dropped with a plain note); a terminal nobody typed into or read for 10 minutes is stopped, and every terminal is stopped after 60 minutes; all are stopped when Syok Code exits (a helper's terminals when the helper finishes). The main agent and workers have the tools, read-only explorers do not. Not available with `--sandbox`.
+  - **Windows**: Bun has no pseudo-terminals on Windows, so the tools are not offered there (they say so if called). Give the answers up front instead (flags such as `--yes`, or `program < answers.txt`), or run Syok Code in WSL. Tested on real Linux and Mac terminals in CI.
+  - A REPL or debugger can still run code you did not see typed in advance (as `python3 script.py` through `run_command` can), so use `--confine` (on by default on Linux and Mac) when that matters.
 
 ## New in 0.14
 - **Parallel editing**: when a job splits into separate parts in different files, the AI can run a worker for each part at the same time, each in its own copy of the project, and join the results into your folder. It needs a git project. You are asked before the workers start (not in `--mode auto`). Up to 2 run at once by default: `--workers 4`, or `"parallel_workers": 4` in `.syok/settings.json`, changes that (0 switches it off, 8 is the most), and `syok setup` asks for your everyday number.
@@ -193,7 +199,7 @@ A skill is a `SKILL.md` file of instructions. The AI follows it and, when the sk
 - `skill-smoke` workflow (Actions tab): runs a real skill through your Syok key and checks the AI really ran the command.
 
 ## Not yet
-Interactive terminals (programs that wait for typed input), syncing the skills you installed on the Syok website into the CLI, and a web bridge to the Syok app. See the plan in the Syok project notes.
+Syncing the skills you installed on the Syok website into the CLI, and a web bridge to the Syok app. See the plan in the Syok project notes.
 
 ## New in 0.6
 

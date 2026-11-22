@@ -35,7 +35,7 @@ export interface HookInfo { tool?: string; args?: any; result?: string; prompt?:
 
 /** Syok's tool names as Claude Code calls the same tools. */
 export const CLAUDE_TOOL: Record<string, string> = {
-  run_command: "Bash", bg_start: "Bash", job_start: "Bash", write_file: "Write", edit_file: "Edit", read_file: "Read", list_files: "LS",
+  run_command: "Bash", bg_start: "Bash", job_start: "Bash", pty_start: "Bash", write_file: "Write", edit_file: "Edit", read_file: "Read", list_files: "LS",
   find_files: "Glob", search: "Grep", find_symbol: "Grep", outline: "Grep", web_fetch: "WebFetch", web_search: "WebSearch", delegate: "Task", parallel_edit: "Task", skill: "Skill",
 };
 export const claudeToolName = (t: string) => CLAUDE_TOOL[t] || t;
@@ -52,7 +52,7 @@ export function claudeInput(tool: string, a: any, root: string): Record<string, 
   a = a || {};
   switch (tool) {
     case "run_command": return { command: String(a.command ?? ""), ...(a.timeout_sec ? { timeout: Number(a.timeout_sec) * 1000 } : {}) };
-    case "bg_start": case "job_start": return { command: String(a.command ?? ""), run_in_background: true };
+    case "bg_start": case "job_start": case "pty_start": return { command: String(a.command ?? ""), run_in_background: true };
     case "write_file": return { file_path: abs(a.path), content: String(a.content ?? "") };
     case "edit_file": return { file_path: abs(a.path), old_string: String(a.old_text ?? ""), new_string: String(a.new_text ?? ""), replace_all: !!a.replace_all };
     case "read_file": return { file_path: abs(a.path), ...(a.start_line ? { offset: Number(a.start_line) } : {}), ...(a.start_line && a.end_line ? { limit: Number(a.end_line) - Number(a.start_line) + 1 } : {}) };

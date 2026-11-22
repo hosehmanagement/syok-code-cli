@@ -220,7 +220,7 @@ export async function runAgent(o: Opts): Promise<Result> {
   const log = o.log || (() => {});
   if (ownsCtx && settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, ctx.root, log);
   try { return await loop(o, ctx, model, profile, log); }
-  finally { if (ownsCtx) { ctx.bg.stopAll(); ctx.mcp.forEach((m) => m.stop()); ctx.lsp?.stopAll(); } }
+  finally { if (ownsCtx) { ctx.bg.stopAll(); ctx.pty?.stopAll(); ctx.mcp.forEach((m) => m.stop()); ctx.lsp?.stopAll(); } }
 }
 async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s: string) => void): Promise<Result> {
   const hooks = ctx.settings.hooks || {};
@@ -248,8 +248,8 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
   const sub = async (task: string, role: string): Promise<string> => {
     const agent = ctx.agents?.find((a) => a.name === role);
     const explorer = !agent && role !== "worker";
-    const child: Ctx = { ...ctx, depth: ctx.depth + 1, allowed: agent ? agent.allowed : explorer ? READONLY : undefined, images: [] }; // its own pictures: explorers run side by side
-    const r = await runAgent({ root: ctx.root, task, base: o.base, key: o.key, model, mode: ctx.mode, ask: ctx.ask, settings: ctx.settings, profile: { ...profile, maxSteps: Math.min(profile.maxSteps, 20) }, fetchImpl: f, log: (s) => log("  [" + role + "] " + s), ctx: child, system: agent ? agentSystem(agent) : explorer ? EXPLORER : WORKER, signal: o.signal });
+    const child: Ctx = { ...ctx, depth: ctx.depth + 1, allowed: agent ? agent.allowed : explorer ? READONLY : undefined, images: [], pty: undefined }; // its own pictures: explorers run side by side
+    const r = await runAgent({ root: ctx.root, task, base: o.base, key: o.key, model, mode: ctx.mode, ask: ctx.ask, settings: ctx.settings, profile: { ...profile, maxSteps: Math.min(profile.maxSteps, 20) }, fetchImpl: f, log: (s) => log("  [" + role + "] " + s), ctx: child, system: agent ? agentSystem(agent) : explorer ? EXPLORER : WORKER, signal: o.signal  }).finally(() => child.pty?.stopAll()); // a helper's terminals end with it
     tokens += r.tokens; mergeUsage(usage, r.usage);
     return clip(`(${role} finished in ${r.steps} steps, ${r.stopped})\n${r.summary}`, 6000);
   };
@@ -269,7 +269,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
         const w = await runAgent({ root, task: t.task, base: o.base, key: o.key, model, mode: ctx.mode, ask: askOne, settings: ctx.settings, profile: { ...profile, maxSteps: Math.min(profile.maxSteps, 30) }, fetchImpl: f, log: (s) => log(`  [${t.name}] ` + s), ctx: child, system: WORKER + PARALLEL_WORKER, signal: o.signal });
         tokens += w.tokens; mergeUsage(usage, w.usage); ctx.ran.commands += w.commands;
         return { summary: w.summary, steps: w.steps, stopped: w.stopped };
-      } finally { child.bg.stopAll(); child.lsp?.stopAll(); }
+      } finally { child.bg.stopAll(); child.pty?.stopAll(); child.lsp?.stopAll(); }
     } });
     return clip(describeParallel(r), 16000);
   };
