@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { summarizeHistory } from "./compactor.ts";
 import { withImages } from "./image.ts";
 import { pickProfile, type Profile } from "./profiles.ts";
+import { openTodos, todoNudge, renderTodos, type TodoItem } from "./todo.ts";
 import type { Mode, Asker, Settings } from "./perm.ts";
 
 export const SYSTEM = `You are Syok Code, a careful senior software engineer working in the user's project folder on their own computer. You act only through the tools. You are specialised for programming: writing code from plain-language descriptions in any language, debugging, translating code between languages, explaining code and writing tests. If asked for something unrelated to programming, say briefly that you only help with code and stop.
@@ -37,7 +38,7 @@ Rules:
 export const SYSTEM_GENERAL = SYSTEM.replace(/You are specialised for programming:.*?and stop\./, "You help with any task that can be done in a terminal: programming, scripts, data and file work, system setup, long-running jobs and automation. If asked for something that cannot be done with these tools, say so briefly.").replace("a careful senior software engineer", "a careful senior engineer and terminal operator");
 
 export interface Msg { role: string; content?: any; tool_calls?: any[]; tool_call_id?: string; name?: string }
-export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean; routes: Route[]; commands: number; declined: number; usage: Usage; check?: { command: string; passed: boolean | null } }
+export interface Result { summary: string; steps: number; tokens: number; touched: string[]; stopped: string; messages: Msg[]; ranTests: boolean; routes: Route[]; commands: number; declined: number; usage: Usage; check?: { command: string; passed: boolean | null }; /** The main agent's todo list at the end (empty when it kept none). */ todos?: TodoItem[] }
 /** What one run used: tokens sent (input) and written (output), and how many steps each provider answered. */
 export interface Usage { input: number; output: number; total: number; steps: number; by: Record<string, { steps: number; input: number; output: number }> }
 export const emptyUsage = (): Usage => ({ input: 0, output: 0, total: 0, steps: 0, by: {} });
@@ -242,7 +243,7 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
   }
   messages.push({ role: "user", content: withImages(planned + (hookCtx ? "Context from the project's hooks:\n" + hookCtx.trim() + "\n\n" : "") + (o.history ? o.task : `Task:\n${o.task}\n\nThe project is in the current folder.`), o.images || []) });
   const f = o.fetchImpl || fetch;
-  let summaryFailed = false; let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0, runTries = 0; const routes: Route[] = [];
+  let summaryFailed = false; let steps = 0, tokens = 0, summary = "", stopped = "", nudged = false, repeats = 0, lastSig = "", stopTries = 0, runTries = 0, todoTries = 0; const routes: Route[] = [];
   const usage = emptyUsage(); let checkTries = 0, lastProvider = ""; let check: Result["check"];
   const sub = async (task: string, role: string): Promise<string> => {
     const agent = ctx.agents?.find((a) => a.name === role);
@@ -304,12 +305,18 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     runTries++; messages.push({ role: "user", content: MUST_RUN_NUDGE }); log("[skill check] no command was run yet; asked the AI to run them");
     return true;
   };
+  // Finishing with todo items still open is sent back once, with the open items; a second finish is accepted.
+  const todoGate = (): boolean => {
+    if (ctx.depth > 0 || ctx.mode === "plan" || todoTries >= 1 || !openTodos(ctx.todos).length) return false;
+    todoTries++; messages.push({ role: "user", content: todoNudge(ctx.todos!) }); log(`[todo check] ${openTodos(ctx.todos).length} item(s) still open; asked the AI to finish them`);
+    return true;
+  };
   while (steps < profile.maxSteps) {
     steps++;
     if (compact(messages, profile)) log("(older tool output shortened to save room)");
     if (!o.noSummary && !summaryFailed && ctx.depth === 0 && messages.length > 12 && size(messages) > profile.compactAtChars * 2) {
       try {
-        const r = await summarizeHistory(messages, (p) => askModel(o.base, o.key, model, p, f, o.signal));
+        const r = await summarizeHistory(messages, (p) => askModel(o.base, o.key, model, p, f, o.signal), { todos: ctx.todos });
         if (r.removed) { messages.splice(0, messages.length, ...r.messages); log("(the earlier conversation was summarized to save room)"); } else summaryFailed = true;
       } catch (e: any) { summaryFailed = true; log("(could not summarize the chat: " + e.message + ")"); }
     }
@@ -345,8 +352,11 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
       if (args === null) { messages.push({ role: "tool", tool_call_id: tc.id, name, content: "Error: the tool arguments were not valid JSON. Send the call again with valid JSON." }); continue; }
       if (name === "finish") {
         messages.push({ role: "tool", tool_call_id: tc.id, name, content: "ok" });
-        if (runGate() || await checkGate() || await stopGate()) { for (let j = i + 1; j < calls.length; j++) messages.push({ role: "tool", tool_call_id: calls[j].id, name: calls[j].function?.name, content: "skipped" }); break; }
-        summary = String(args.summary || ""); stopped = "finished"; finished = true; break;
+        if (runGate() || todoGate() || await checkGate() || await stopGate()) { for (let j = i + 1; j < calls.length; j++) messages.push({ role: "tool", tool_call_id: calls[j].id, name: calls[j].function?.name, content: "skipped" }); break; }
+        summary = String(args.summary || ""); stopped = "finished"; finished = true;
+        const left = ctx.depth === 0 && ctx.mode !== "plan" ? openTodos(ctx.todos) : [];
+        if (left.length) { summary += `\n(Todo items left open: ${left.map((t) => t.id + ". " + t.text).join("; ")})`; log(`[todo] finished with ${left.length} item(s) left open`); }
+        break;
       }
       const sig = name + JSON.stringify(args); repeats = sig === lastSig ? repeats + 1 : 0; lastSig = sig;
       let out: string;
@@ -358,12 +368,13 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
       } else if (name === "parallel_edit") {
         log(`> parallel_edit ${JSON.stringify(args).slice(0, 200)}`); out = await parallelEdit(args).catch((e) => "Error: " + (e?.message || e));
       } else {
-        log(`> ${name} ${JSON.stringify(args).slice(0, 140)}`);
+        if (name !== "todo") log(`> ${name} ${JSON.stringify(args).slice(0, 140)}`);
         const pre = await runHooks(hooks.PreToolUse, "PreToolUse", { tool: name, args, cwd: ctx.root }, ctx.root, name);
         if (pre.notice) log("[hook] " + pre.notice);
         if (pre.block) out = "Blocked by a hook: " + (pre.message || "no reason given") + (pre.context ? "\n[hook] " + pre.context : "");
         else {
           out = await runTool(ctx, name, args);
+          if (ctx.todoChanged) { ctx.todoChanged = false; log(renderTodos(ctx.todos || [])); }
           const post = await runHooks(hooks.PostToolUse, "PostToolUse", { tool: name, args, result: out.slice(0, 2000), cwd: ctx.root }, ctx.root, name, { result: out });
           if (post.notice) log("[hook] " + post.notice);
           if (post.message) out += "\n[hook] " + post.message;
@@ -379,6 +390,6 @@ async function loop(o: Opts, ctx: Ctx, model: string, profile: Profile, log: (s:
     if (finished) break;
   }
   if (!stopped) { stopped = "max_steps"; summary = `Stopped after ${profile.maxSteps} steps without finishing.`; }
-  return { summary, steps, tokens, touched: [...ctx.touched], stopped, messages, ranTests: ctx.ran.tests, routes, commands: ctx.ran.commands, declined: ctx.ran.declined, usage, check };
+  return { summary, steps, tokens, touched: [...ctx.touched], stopped, messages, ranTests: ctx.ran.tests, routes, commands: ctx.ran.commands, declined: ctx.ran.declined, usage, check, todos: ctx.depth === 0 ? ctx.todos || [] : [] };
 }
 export { makeCtx, undoAll };

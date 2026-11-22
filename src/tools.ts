@@ -16,6 +16,7 @@ import { agentsHint, loadAgents, type Agent } from "./agents.ts";
 import { loadSkills, skillLabel, skillText, uniqueSkills } from "./skills.ts";
 import { pluginEnv } from "./plugins.ts";
 import { findSymbol, describeSymbol, outline as symbolOutline, describeOutline, readSmall } from "./symbols.ts";
+import { applyTodo, TODO_MAX_ITEMS, TODO_MAX_TEXT, type TodoItem } from "./todo.ts";
 
 /** Seconds a run_command may take: the AI's request, limited by the user's settings (default max 10 minutes, hard ceiling 24 hours). */
 export function commandTimeout(s: Settings, asked?: number): number {
@@ -50,6 +51,7 @@ export const TOOLS = [
   fn("web_fetch", "Read one web page (http or https) as plain text. Long pages come in parts: the reply says which characters are shown and the start value for the next part. Never put secrets or the user's private data in the address.", { url: { type: "string" }, start: { type: "integer" }, max_chars: { type: "integer" } }, ["url"]),
   fn("delegate", "Hand a sub-task to a helper with a fresh, empty context so it does not fill your memory. role 'explorer' (default) is read-only: use it to search or read a lot and get a short answer; several explorers in one message run in parallel. role 'worker' may edit files and run commands; use it for one self-contained change. Give a complete, specific task.", { task: { type: "string" }, role: { type: "string", description: "explorer, worker, or the name of one of the user's helpers" } }, ["task"]),
   fn("parallel_edit", "Run two or more workers AT THE SAME TIME, each making one change in its own separate copy of the project; afterwards their changes are joined into the real project. Use it when a job splits into independent changes that touch DIFFERENT files (for example: three modules that each need the same kind of update, or a feature plus its documentation). Do not use it for changes to the same file or for steps that depend on each other: do those yourself, in order. Each worker starts with an empty memory, so every task must be complete on its own: what to change, in which files, and how to check it. A worker whose change overlaps with another's is not joined, and you are told so you can redo it. After it returns, run the project's tests on the joined result.", { tasks: { type: "array", description: "two to eight tasks", items: { type: "object", properties: { name: { type: "string", description: "a short name, for example api or docs" }, task: { type: "string", description: "complete, specific instructions" } }, required: ["name", "task"] } } }, ["tasks"]),
+  fn("todo", `Your todo list for a long task with several steps. It is kept with this chat and given back to you whenever the chat is shortened, so you never lose your place. Use it when a task has 3 or more steps: action 'set' replaces the whole list (items: {id, text, status}); 'update' changes one item's status or text by id; 'list' shows it. status is pending, in_progress or done; at most one item may be in_progress at a time. Mark an item in_progress when you start it and done as soon as it is finished. At most ${TODO_MAX_ITEMS} items of ${TODO_MAX_TEXT} characters each.`, { action: { type: "string", enum: ["set", "update", "list"] }, items: { type: "array", description: "for set: the whole new list", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, status: { type: "string", enum: ["pending", "in_progress", "done"] } }, required: ["id", "text"] } }, id: { type: "string", description: "for update: the item to change" }, status: { type: "string", enum: ["pending", "in_progress", "done"] }, text: { type: "string", description: "for update: a new text" } }, ["action"]),
   fn("finish", "Call when the task is done (or cannot be done). Give a short plain summary.", { summary: { type: "string" } }, ["summary"]),
   fn("skill", "Open one of the user's skills (listed in your instructions under \"Skills you can use\") and get its full instructions. Call it before doing a task the skill is for, then follow it. Optional args = the details of what the user wants, as the skill expects them.", { name: { type: "string" }, args: { type: "string" } }, ["name"]),
 ];
@@ -65,6 +67,7 @@ export function toolDefs(c: Ctx): any[] {
   if (c.settings.memory === false || c.depth > 0) t = t.filter((x) => x.function.name !== "remember");
   if (c.depth > 0 || c.mode === "plan" || workerLimit(c.settings) < 1 || !isGitProject(c.root)) t = t.filter((x) => x.function.name !== "parallel_edit");
   if (!c.skillsOn) t = t.filter((x) => x.function.name !== "skill");
+  if (c.depth > 0) t = t.filter((x) => x.function.name !== "todo"); // the main agent's own plan; helpers report back instead
   return c.allowed ? t : [...t, ...c.mcp.flatMap((m) => m.defs())];
 }
 /** Everything changed in this session, as a unified diff (for /diff). */
@@ -77,7 +80,7 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string>; /** The user has skills the AI may open by itself (the skill tool). */ skillsOn?: boolean }
+export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string>; /** The user has skills the AI may open by itself (the skill tool). */ skillsOn?: boolean; /** The main agent's todo list (saved with the chat). */ todos?: TodoItem[]; /** Set when the todo tool changed the list, so the loop can show it. */ todoChanged?: boolean }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
   return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false }, agents: settings.agents === false ? [] : loadAgents(resolve(root)) };
 }
@@ -286,6 +289,12 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
           ok.hosts.add(host);
         }
         return await webFetch({ url: a.url, start: a.start, max_chars: Math.min(a.max_chars || 12000, c.profile.maxToolChars || 12000) }, c.web || {}, chk);
+      }
+      case "todo": {
+        if (c.depth > 0) return "Error: only the main agent keeps a todo list. Put your progress in your report instead.";
+        const r = applyTodo(c.todos, a);
+        if (r.changed) { c.todos = r.items; c.todoChanged = true; }
+        return r.out;
       }
       case "delegate": return "Error: delegate only works in the main agent loop.";
       case "parallel_edit": return "Error: parallel_edit only works in the main agent loop.";
