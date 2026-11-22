@@ -1,13 +1,14 @@
 // Language helpers: real language servers (TypeScript's and Python's, from this repository's dev dependencies) answering
 // about small real projects, plus a broken stand-in for the failure cases.
 import { test, expect, afterAll } from "bun:test";
-import { existsSync, writeFileSync, utimesSync, mkdtempSync, realpathSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, utimesSync, mkdtempSync, realpathSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { tmpProject, call } from "./helpers.ts";
-import { LspSet, LspClient, lspTool, detectLangs, findServer, describeLangs, lspAvailable, resetLspCache, LANGS, langOf, uriKey } from "../src/lsp.ts";
-import { makeCtx, toolDefs, runTool } from "../src/tools.ts";
+import { LspSet, LspClient, lspTool, detectLangs, findServer, describeLangs, lspAvailable, resetLspCache, LANGS, langOf, uriKey, applyTextEdits, badName } from "../src/lsp.ts";
+import { makeCtx, toolDefs, runTool, undoAll, sessionDiff, READONLY } from "../src/tools.ts";
+import { takeCheckpoint, rewindTo, type Checkpoint } from "../src/checkpoint.ts";
 import { planConfine, probeConfine, setConfine } from "../src/confine.ts";
 import { DEFAULT } from "../src/profiles.ts";
 
@@ -137,4 +138,96 @@ test("a file is recognised however a helper spells its address (Windows drive le
   expect(uriKey("file:///C:/Users/Me/proj/src/a.ts")).not.toBe(uriKey("file:///C:/Users/Me/proj/src/b.ts"));
   if (process.platform !== "win32") { expect(uriKey("file:///home/me/Proj/a.ts")).toBe("/home/me/Proj/a.ts"); expect(uriKey("file:///home/me/Proj/a.ts")).not.toBe(uriKey("file:///home/me/proj/a.ts")); } // letter case matters where the disk says it does
   expect(uriKey("file:///home/me/my%20proj/a.ts")).toContain("my proj");
+});
+
+// ---- rename: the helper finds every real use; the change goes through the same path as edit_file ----
+const renameProject = () => tmpProject({
+  "tsconfig.json": JSON.stringify({ compilerOptions: { strict: true, target: "es2022", module: "esnext", moduleResolution: "bundler", noEmit: true }, include: ["src"] }),
+  "src/a.ts": "export function greet(name: string): string { return \"hi \" + name; }\nexport class Box {\n  value = 1;\n  greet() { return 2; }\n}\n",
+  "src/b.ts": "import { greet, Box } from \"./a\";\nexport const x: string = greet(\"y\");\nexport const n = new Box().greet();\n",
+  "src/c.ts": "import { greet } from \"./a\";\nexport function twice(s: string) { return greet(s) + greet(s); }\n",
+});
+const readF = (d: string, p: string) => readFileSync(join(d, p), "utf8");
+
+test("TypeScript rename, for real: across 3 files, the method with the same name left alone; /undo, checkpoints and ask mode work", async () => {
+  const d = renameProject(); const asked: Array<[string, string]> = [];
+  const ctx = makeCtx(d, "ask", async (q: string, p?: string) => { asked.push([q, p || ""]); return true; }, { lsp: TS } as any, DEFAULT);
+  const cps: Checkpoint[] = []; takeCheckpoint(ctx, cps, "before", 0);
+  try {
+    // asked from a USE in another file, not from the definition: still renamed everywhere
+    const out = await runTool(ctx, "lsp", { action: "rename", path: "src/c.ts", line: 2, symbol: "greet", new_name: "welcome" });
+    expect(out).toContain('Renamed "greet" to "welcome": 6 changes in 3 files'); expect(out).toContain("src/a.ts: 1 change\n"); expect(out).toContain("src/b.ts: 2 changes"); expect(out).toContain("src/c.ts: 3 changes");
+    expect(readF(d, "src/a.ts")).toContain("export function welcome(name: string)"); expect(readF(d, "src/a.ts")).toContain("  greet() { return 2; }"); // the method keeps its name
+    expect(readF(d, "src/b.ts")).toBe("import { welcome, Box } from \"./a\";\nexport const x: string = welcome(\"y\");\nexport const n = new Box().greet();\n");
+    expect(readF(d, "src/c.ts")).toBe("import { welcome } from \"./a\";\nexport function twice(s: string) { return welcome(s) + welcome(s); }\n");
+    // ask mode: ONE question for the whole rename, showing the diff of every file
+    expect(asked.length).toBe(1); expect(asked[0][0]).toBe("edit 3 files (rename \"greet\" to \"welcome\")");
+    for (const f of ["src/a.ts", "src/b.ts", "src/c.ts"]) expect(asked[0][1]).toContain(f);
+    expect(asked[0][1]).toContain("+import { welcome } from \"./a\";");
+    expect([...ctx.touched].sort()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]); expect(sessionDiff(ctx)).toContain("-export function greet");
+    // the helper sees the new names straight away: no errors, and the new name has all its uses
+    expect(await runTool(ctx, "lsp", { action: "diagnostics", path: "src/c.ts" })).toContain("reports no problems");
+    expect(await runTool(ctx, "lsp", { action: "references", path: "src/a.ts", line: 1, symbol: "welcome" })).toMatch(/^5 place\(s\)/);
+    // a checkpoint taken before puts everything back
+    const r = rewindTo(ctx, cps, 1)!; expect(r.restored.sort()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]); expect(readF(d, "src/c.ts")).toContain("return greet(s) + greet(s)");
+    // and so does /undo, after a second rename (this time at the definition, by line and column)
+    const again = await runTool(ctx, "lsp", { action: "rename", path: "src/a.ts", line: 1, column: 17, new_name: "hello" }); expect(again).toContain("6 changes in 3 files");
+    expect(readF(d, "src/b.ts")).toContain("hello(\"y\")"); expect(undoAll(ctx).sort()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]); expect(readF(d, "src/b.ts")).toContain("greet(\"y\")");
+  } finally { ctx.lsp?.stopAll(); }
+}, 120000);
+
+test("rename refuses: bad new names, a refused approval, keywords, library names, planning mode and read-only helpers", async () => {
+  const d = renameProject(); const names = ["src/a.ts", "src/b.ts", "src/c.ts"]; const before = names.map((f) => readF(d, f)); const same = () => expect(names.map((f) => readF(d, f))).toEqual(before);
+  const no = makeCtx(d, "ask", async () => false, { lsp: TS } as any, DEFAULT);
+  try {
+    for (const bad of ["two words", "9lives", "a.b", "", "class", "x-y"]) { const o = await runTool(no, "lsp", { action: "rename", path: "src/a.ts", line: 1, symbol: "greet", new_name: bad }); expect(o).toMatch(/^Error: .*(not a valid name|reserved word|give the new name)/); expect(o).toContain("Nothing was changed"); }
+    expect(await runTool(no, "lsp", { action: "rename", path: "src/a.ts", line: 1, symbol: "greet", new_name: "greet" })).toContain("already \"greet\"");
+    expect(await runTool(no, "lsp", { action: "rename", path: "src/a.ts", line: 1, symbol: "greet", new_name: "welcome" })).toContain("did not allow"); same(); expect(no.touched.size).toBe(0);
+    // the helper cannot rename a keyword: said plainly
+    const kw = await runTool(no, "lsp", { action: "rename", path: "src/a.ts", line: 1, symbol: "return", new_name: "x" }); expect(kw).toMatch(/^Error: the TypeScript and JavaScript helper cannot rename/); expect(kw).toContain("Nothing was changed");
+    // a name defined outside the project (the standard library's Array.map) is not renamed
+    writeFileSync(join(d, "src", "d.ts"), "export const s = [1].map((v) => v);\n");
+    const lib = await runTool(no, "lsp", { action: "rename", path: "src/d.ts", line: 1, symbol: "map", new_name: "mapped" }); expect(lib).toMatch(/^Error: .*(outside the project|cannot rename)/); expect(lib).toContain("Nothing was changed"); expect(readF(d, "src/d.ts")).toContain(".map(");
+    expect(await runTool(no, "lsp", { action: "rename", path: "../x.ts", line: 1, new_name: "y" })).toContain("outside the project");
+    // planning mode, read-only helpers and preview get only the list
+    const plan = makeCtx(d, "plan", async () => true, { lsp: TS } as any, DEFAULT); plan.lsp = no.lsp;
+    const p = await runTool(plan, "lsp", { action: "rename", path: "src/a.ts", line: 1, symbol: "greet", new_name: "welcome" }); expect(p).toContain("would make 6 changes in 3 files"); expect(p).toContain("src/c.ts: 3 changes"); expect(p).toContain("planning mode"); same();
+    const ro = makeCtx(d, "auto", async () => true, { lsp: TS } as any, DEFAULT); ro.lsp = no.lsp; ro.allowed = READONLY; ro.depth = 1;
+    expect(await runTool(ro, "lsp", { action: "rename", path: "src/a.ts", line: 1, symbol: "greet", new_name: "welcome" })).toContain("this helper may not change files"); same();
+    const pv = makeCtx(d, "auto", async () => true, { lsp: TS } as any, DEFAULT); pv.lsp = no.lsp;
+    expect(await runTool(pv, "lsp", { action: "rename", path: "src/a.ts", line: 1, symbol: "greet", new_name: "welcome", preview: true })).toContain("preview only"); same();
+  } finally { no.lsp?.stopAll(); }
+}, 120000);
+
+test("rename refuses when it would change a protected file (the same rules as edit_file)", async () => {
+  const d = tmpProject({
+    "tsconfig.json": JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, files: ["src/a.ts", "src/.env.ts"] }),
+    "src/a.ts": "export const token = 1;\n", "src/.env.ts": "import { token } from \"./a\";\nexport const t = token;\n",
+  });
+  const ctx = makeCtx(d, "auto", async () => true, { lsp: TS } as any, DEFAULT);
+  try {
+    const out = await runTool(ctx, "lsp", { action: "rename", path: "src/a.ts", line: 1, symbol: "token", new_name: "tok" });
+    expect(out).toContain("src/.env.ts is protected and cannot be changed"); expect(out).toContain("Nothing was changed");
+    expect(readF(d, "src/a.ts")).toBe("export const token = 1;\n"); expect(ctx.touched.size).toBe(0);
+  } finally { ctx.lsp?.stopAll(); }
+}, 120000);
+
+test("Python rename, for real: across 3 files", async () => {
+  const d = tmpProject({ "m.py": "def area(w: int, h: int) -> int:\n    return w * h\n", "n.py": "from m import area\n\nx: int = area(1, 2)\n", "o.py": "import m\nfrom m import area\n\nprint(area(3, 4), m.area(5, 6))\n" });
+  const ctx = makeCtx(d, "auto", async () => true, { lsp: PY } as any, DEFAULT);
+  try {
+    const out = await runTool(ctx, "lsp", { action: "rename", path: "m.py", line: 1, symbol: "area", new_name: "surface" });
+    expect(out).toContain('Renamed "area" to "surface"'); expect(out).toContain("in 3 files"); expect(out).toContain("m.py: 1 change\n"); expect(out).toContain("n.py: 2 changes"); expect(out).toContain("o.py: 3 changes");
+    expect(readF(d, "m.py")).toBe("def surface(w: int, h: int) -> int:\n    return w * h\n"); expect(readF(d, "n.py")).toBe("from m import surface\n\nx: int = surface(1, 2)\n");
+    expect(readF(d, "o.py")).toBe("import m\nfrom m import surface\n\nprint(surface(3, 4), m.surface(5, 6))\n");
+    expect(await runTool(ctx, "lsp", { action: "rename", path: "m.py", line: 1, symbol: "surface", new_name: "lambda" })).toContain("reserved word");
+  } finally { ctx.lsp?.stopAll(); }
+}, 120000);
+
+test("rename edits are applied exactly (several on one line, Windows line ends) and overlapping ones are refused", () => {
+  const e = (l: number, s: number, en: number, t: string) => ({ range: { start: { line: l, character: s }, end: { line: l, character: en } }, newText: t });
+  expect(applyTextEdits("ab ab\r\nab\r\n", [e(0, 0, 2, "xyz"), e(0, 3, 5, "xyz"), e(1, 0, 2, "q")])).toBe("xyz xyz\r\nq\r\n");
+  expect(applyTextEdits("héllo wörld\n", [e(0, 6, 11, "earth")])).toBe("héllo earth\n");
+  expect(() => applyTextEdits("abcdef", [e(0, 0, 3, "x"), e(0, 2, 4, "y")])).toThrow("overlap");
+  expect(badName("typescript", "$ok_1")).toBe(""); expect(badName("python", "$no")).toContain("not a valid name"); expect(badName("python", "café")).toBe(""); expect(badName("typescript", "enum")).toContain("reserved");
 });
