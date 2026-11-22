@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync, unlinkSync, realpathSync } from "node:fs";
 import { memoryDir, addNote, forgetNote, noteProblem, tidy } from "./memory.ts";
 import { LspSet, lspTool, lspAvailable, planRename, tellChanged } from "./lsp.ts";
 import { workerLimit, isGitProject } from "./parallel.ts";
-import { resolve, relative, dirname, join, sep } from "node:path";
+import { resolve, relative, dirname, join, sep, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { spawnCommand, killTree, cleanEnv } from "./shell.ts";
 import { editBlocked, SECRET_LIKE, allowEdit, allowCommand, type Mode, type Asker, type Settings, type WorkflowEdits } from "./perm.ts";
@@ -17,6 +17,7 @@ import { loadSkills, skillLabel, skillText, uniqueSkills } from "./skills.ts";
 import { pluginEnv } from "./plugins.ts";
 import { findSymbol, describeSymbol, outline as symbolOutline, describeOutline, readSmall } from "./symbols.ts";
 import { applyTodo, TODO_MAX_ITEMS, TODO_MAX_TEXT, type TodoItem } from "./todo.ts";
+import { peekFile, PEEK_MODES } from "./peek.ts";
 
 /** Seconds a run_command may take: the AI's request, limited by the user's settings (default max 10 minutes, hard ceiling 24 hours). */
 export function commandTimeout(s: Settings, asked?: number): number {
@@ -38,6 +39,7 @@ export const TOOLS = [
   fn("remember", "Save one short note to your memory, which you are given again at the start of every later chat. Use it sparingly, for facts worth having next time that are NOT already in the project's instruction files or obvious from the code: how to build, test or run this project when it took effort to find out; a decision the user made; a preference the user stated. One plain sentence, at most 280 characters. Never a key, password or token. about 'project' (default) is for this project only; about 'user' is read in every project and the user is asked first. To correct a note, pass forget with a few words of the old note (and text with the new one if there is one).", { text: { type: "string", description: "the note: one sentence" }, about: { type: "string", enum: ["project", "user"] }, forget: { type: "string", description: "a few words of an existing note to remove" } }, []),
   fn("lsp", "Exact code intelligence from the language's own tooling (a language helper is installed for this project). Use it when the answer must be exact: action 'definition' = where the name on a line is really defined (follows imports and types); 'references' = every real use of it across the project, the right ones only even when other things share the name; 'hover' = its type and documentation; 'diagnostics' = the errors and warnings the compiler reports for a file (use after editing, before running the tests); 'symbols' = what a file defines, or with query (and no path) a search for a name across the project; 'rename' = rename the name everywhere it is really used (imports and other files included, other things with the same name left alone) to new_name: it lists the files and changes, and applies them like edit_file (the user approves the whole rename at once; /undo reverts it); preview true only lists them. For definition, references, hover and rename give path, line and symbol (the name as written on that line), or line and column.", { action: { type: "string", enum: ["definition", "references", "hover", "diagnostics", "symbols", "rename"] }, path: { type: "string" }, line: { type: "integer", description: "line number, starting at 1" }, symbol: { type: "string", description: "the name on that line to ask about" }, column: { type: "integer", description: "instead of symbol: the column of the name on that line, starting at 1" }, query: { type: "string", description: "for symbols without a path: the name to search for" }, new_name: { type: "string", description: "for rename: the new name (one identifier)" }, preview: { type: "boolean", description: "for rename: only list what would change" } }, ["action"]),
   fn("outline", "List what a code file defines (functions, classes, types, methods) with line numbers, without reading the whole file. Use it before read_file on a big file, then read only the lines you need.", { path: { type: "string" } }, ["path"]),
+  fn("peek_file", "Look inside a file too big to read (large logs, big JSON lines or CSV, any size): it is read as a stream and the answer is short. mode 'summary' (default) = size, line count, first and last 20 lines, line lengths, the format (log, json, jsonl, csv, other); 'patterns' = the most frequent kinds of line (numbers, ids, timestamps replaced) with counts and first line, and the most frequent ERROR/WARN/Exception lines; 'sample' = evenly spaced windows of lines from the whole file; 'around' = the lines around the first matches of a regular expression, with the total number of matches; 'columns' (csv, jsonl) = field names, types and the values of fields with few distinct values.", { path: { type: "string" }, mode: { type: "string", enum: [...PEEK_MODES] }, top: { type: "integer", description: "patterns: how many (default 20)" }, pattern: { type: "string", description: "around: the regular expression" }, ignore_case: { type: "boolean" }, max_matches: { type: "integer", description: "around: matches shown (default 10)" }, context: { type: "integer", description: "around: lines before and after (default 3)" }, windows: { type: "integer", description: "sample: how many windows (default 8)" }, lines: { type: "integer", description: "sample: lines per window (default 10)" }, max_rows: { type: "integer", description: "columns: rows to read at most (default 200000)" } }, ["path"]),
   fn("edit_file", "Replace text in an existing file. old_text must match exactly and be unique (add surrounding lines if not). Set replace_all to change every match.", { path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" }, replace_all: { type: "boolean" } }, ["path", "old_text", "new_text"]),
   fn("write_file", "Create a new file or fully replace a file with new content.", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
   fn("run_command", "Run a shell command in the project root (tests, build, git status...). Output is cut if long. timeout_sec defaults to 120 (the user can change the default and the maximum). For anything that may run longer than a few minutes use job_start instead.",{ command: { type: "string" }, timeout_sec: { type: "integer" } }, ["command"]),
@@ -57,7 +59,7 @@ export const TOOLS = [
 ];
 
 export const WEB_TOOLS = new Set(["web_search", "web_fetch"]);
-export const READONLY = new Set(["list_files", "read_file", "search", "find_files", "find_symbol", "outline", "lsp", "finish", "skill"]);
+export const READONLY = new Set(["list_files", "read_file", "search", "find_files", "find_symbol", "outline", "peek_file", "lsp", "finish", "skill"]);
 export function toolDefs(c: Ctx): any[] {
   let t: any[] = TOOLS.filter((x) => !c.allowed || c.allowed.has(x.function.name));
   if (c.depth > 0) t = t.filter((x) => x.function.name !== "delegate");
@@ -142,7 +144,7 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
         const { abs, rel } = safePath(c, a.path);
         if (!existsSync(abs)) return `Error: ${rel} does not exist. Use list_files or find_files.`;
         if (statSync(abs).isDirectory()) return `Error: ${rel} is a folder. Use list_files.`;
-        if (statSync(abs).size > 2_000_000) return "Error: file is larger than 2 MB. Use search or read a line range.";
+        if (statSync(abs).size > 2_000_000) return "Error: file is larger than 2 MB. Use peek_file (summary, patterns, sample, around, columns) or search.";
         const lines = readFileSync(abs, "utf8").split("\n");
         const s = Math.max(1, a.start_line || 1), e = Math.min(lines.length, a.end_line || lines.length);
         const body = lines.slice(s - 1, e).map((l, i) => `${String(s + i).padStart(5)}  ${l}`).join("\n");
@@ -190,6 +192,12 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
         if (a.action === "rename") { try { return cut(await lspRename(c, set, a), c.profile.maxToolChars); } catch (e: any) { return "Error: " + String(e?.message || e).slice(0, 500); } }
         try { return cut(await lspTool(set, c.root, a, [...c.touched].map((f) => join(c.root, f))), c.profile.maxToolChars); }
         catch (e: any) { return "Error: " + String(e?.message || e).slice(0, 500); }
+      }
+      case "peek_file": {
+        const { abs, rel } = safePath(c, a.path);
+        if (!existsSync(abs)) return `Error: ${rel} does not exist. Use list_files or find_files.`;
+        const real = relative(realpathSync(c.root), realpathSync(abs)); if (real.startsWith("..") || isAbsolute(real)) return "Error: that file is a link to a place outside the project folder.";
+        return cut(await peekFile(abs, rel, a), c.profile.maxToolChars || 12000);
       }
       case "outline": {
         const { abs, rel } = safePath(c, a.path);
