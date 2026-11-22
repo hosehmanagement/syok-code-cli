@@ -5,10 +5,11 @@ import { workerLimit, isGitProject } from "./parallel.ts";
 import { resolve, relative, dirname, join, sep, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { spawnCommand, killTree, cleanEnv } from "./shell.ts";
-import { editBlocked, SECRET_LIKE, allowEdit, allowCommand, type Mode, type Asker, type Settings, type WorkflowEdits } from "./perm.ts";
+import { editBlocked, SECRET_LIKE, allowEdit, allowCommand, checkCommand, type Mode, type Asker, type Settings, type WorkflowEdits } from "./perm.ts";
 import type { Profile } from "./profiles.ts";
 import { unifiedDiff } from "./diff.ts";
 import { Bg } from "./bg.ts";
+import { Pty, ptySupported, PTY_UNSUPPORTED, bareShell, typedProblem } from "./pty.ts";
 import { startJob, jobLog, stopJob, describeJobs } from "./jobs.ts";
 import { webFetch, webSearch, checkUrl, hostOf, type WebDeps } from "./web.ts";
 import { quickCheck, quickLine } from "./checks.ts";
@@ -47,6 +48,10 @@ export const TOOLS = [
   fn("bg_start", "Start a long-running command in the background (dev server, watcher). Returns a job id. Use bg_output to read it and bg_stop to stop it.", { command: { type: "string" } }, ["command"]),
   fn("bg_output", "Read the latest output of a background job. Without id, lists all jobs.", { id: { type: "integer" } }, []),
   fn("bg_stop", "Stop a background job.", { id: { type: "integer" } }, ["id"]),
+  fn("pty_start", "Start a program that waits for typed input in a real terminal (python -m pdb, gdb, a REPL, npm init, an installer that asks questions, an ssh prompt). Returns a terminal id and the first output. Then type with pty_send and read with pty_read; stop it with pty_stop when done. Plain shells (bash, sh, zsh, powershell, cmd...) are refused: use run_command for shell commands. At most 3 at once.", { command: { type: "string" }, cols: { type: "integer" }, rows: { type: "integer" } }, ["command"]),
+  fn("pty_send", "Type into a terminal started with pty_start. Key names in angle brackets are pressed as keys: <Enter>, <Tab>, <Up>, <Down>, <Left>, <Right>, <Esc>, <Backspace>, <Ctrl-C>, <Ctrl-D>, <Ctrl-Z>. enter=true presses Enter after the text. Never type keys or passwords: ask the user to.", { id: { type: "integer" }, text: { type: "string" }, enter: { type: "boolean" } }, ["id", "text"]),
+  fn("pty_read", "Read what a terminal printed since the last read, as plain text, and whether it is still running or exited (with its exit code). Waits up to wait_ms (default 1500) for output to arrive and settle. max_chars (default 4000) limits how much is shown. Without id, lists the terminals.", { id: { type: "integer" }, wait_ms: { type: "integer" }, max_chars: { type: "integer" } }, []),
+  fn("pty_stop", "Stop a terminal (and everything it started).", { id: { type: "integer" } }, ["id"]),
   fn("job_start", "Start a long script or heavy task that must KEEP RUNNING even after Syok Code exits (training, a big build, a scraper, a data job). Output goes to a log file in .syok/jobs. Returns a job id. Check it later with job_output (also in a new session) and stop it with job_stop. max_minutes is optional (0 = no limit). Use bg_start instead for a dev server you only need during this session.", { command: { type: "string" }, max_minutes: { type: "number" } }, ["command"]),
   fn("job_output", "Read the end of a saved job's log and whether it is still running or finished (with its exit code). Without id, lists all saved jobs. Optional tail = how many characters of the log to show (default 4000).", { id: { type: "integer" }, tail: { type: "integer" } }, []),
   fn("job_stop", "Stop a saved job (and everything it started).", { id: { type: "integer" } }, ["id"]),
@@ -61,6 +66,7 @@ export const TOOLS = [
 ];
 
 export const WEB_TOOLS = new Set(["web_search", "web_fetch"]);
+export const PTY_TOOLS = new Set(["pty_start", "pty_send", "pty_read", "pty_stop"]);
 export const READONLY = new Set(["list_files", "read_file", "search", "find_files", "find_symbol", "outline", "peek_file", "lsp", "finish", "skill", "view_image"]);
 export function toolDefs(c: Ctx): any[] {
   let t: any[] = TOOLS.filter((x) => !c.allowed || c.allowed.has(x.function.name));
@@ -72,6 +78,7 @@ export function toolDefs(c: Ctx): any[] {
   if (c.depth > 0 || c.mode === "plan" || workerLimit(c.settings) < 1 || !isGitProject(c.root)) t = t.filter((x) => x.function.name !== "parallel_edit");
   if (!c.skillsOn) t = t.filter((x) => x.function.name !== "skill");
   if (c.depth > 0) t = t.filter((x) => x.function.name !== "todo"); // the main agent's own plan; helpers report back instead
+  if (c.mode === "plan" || c.sandbox || !ptySupported()) t = t.filter((x) => !PTY_TOOLS.has(x.function.name));
   return c.allowed ? t : [...t, ...c.mcp.flatMap((m) => m.defs())];
 }
 /** Everything changed in this session, as a unified diff (for /diff). */
@@ -84,7 +91,7 @@ export function sessionDiff(c: Ctx): string {
   }
   return out.join("\n\n");
 }
-export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string>; /** The user has skills the AI may open by itself (the skill tool). */ skillsOn?: boolean; /** The main agent's todo list (saved with the chat). */ todos?: TodoItem[]; /** Set when the todo tool changed the list, so the loop can show it. */ todoChanged?: boolean; /** Workflow-file edits the user allowed (never from a project's settings); unset = blocked. */ workflowEdits?: WorkflowEdits; /** Pictures from view_image and tool servers, waiting to be shown to the AI after this step's tool results. */ images?: { label: string; url: string }[] }
+export interface Ctx { /** Where memory notes are kept, when not the usual place (tests). */ memoryDir?: string; /** Language helpers started for this project, if any. */ lsp?: LspSet; agents?: Agent[]; root: string; mode: Mode; ask: Asker; settings: Settings; profile: Profile; snapshots: Map<string, string | null>; touched: Set<string>; ran: { tests: boolean; commands: number; declined: number }; bg: Bg; /** Interactive terminals (made on first use). */ pty?: Pty; mcp: McpClient[]; depth: number; allowed?: Set<string>; web?: WebDeps; webOk?: { hosts: Set<string>; search: boolean }; sandbox?: (cmd: string, secs: number) => Promise<string>; sandboxPut?: (rel: string, content: string | null) => Promise<string>; /** The user has skills the AI may open by itself (the skill tool). */ skillsOn?: boolean; /** The main agent's todo list (saved with the chat). */ todos?: TodoItem[]; /** Set when the todo tool changed the list, so the loop can show it. */ todoChanged?: boolean; /** Workflow-file edits the user allowed (never from a project's settings); unset = blocked. */ workflowEdits?: WorkflowEdits; /** Pictures from view_image and tool servers, waiting to be shown to the AI after this step's tool results. */ images?: { label: string; url: string }[] }
 export function makeCtx(root: string, mode: Mode, ask: Asker, settings: Settings, profile: Profile): Ctx {
   return { root: resolve(root), mode, ask, settings, profile, snapshots: new Map(), touched: new Set(), ran: { tests: false, commands: 0, declined: 0 }, bg: new Bg(), mcp: [], depth: 0, webOk: { hosts: new Set(), search: false }, agents: settings.agents === false ? [] : loadAgents(resolve(root)) };
 }
@@ -280,6 +287,32 @@ export async function runTool(c: Ctx, name: string, a: any): Promise<string> {
       }
       case "job_output": return a.id == null ? describeJobs(c.root) : jobLog(c.root, +a.id, a.tail || 4000);
       case "job_stop": return stopJob(c.root, +a.id);
+      case "pty_start": {
+        if (!ptySupported()) return PTY_UNSUPPORTED;
+        if (c.sandbox) return "Error: interactive terminals are not available with --sandbox (commands run in the sandbox there). Use run_command.";
+        if (c.mode === "plan") return "Not run. Plan mode: interactive terminals are not available. Finish with your plan; the user approves it before anything changes.";
+        const cmd = String(a.command || "").trim();
+        if (!cmd) return "Error: give the command to start.";
+        if (checkCommand(cmd, c.settings) === "deny") { c.ran.declined++; return "Not run. That command is blocked by Syok Code's safety rules."; }
+        const bare = bareShell(cmd);
+        if (bare) { c.ran.declined++; return `Not run. ${cmd.slice(0, 80)} would start ${bare}. A shell inside a terminal would let typed commands skip Syok Code's checks (and in ask mode, your approval of each command), so plain shells are refused. Run shell commands with run_command, and use pty_start for the program itself (for example: python3 -m pdb app.py).`; }
+        const p = await allowCommand(c.mode, (_w, d) => c.ask("start an interactive terminal", d + "\n(Once started, the AI types into it without asking again. What it types is checked: blocked commands, keys and shells are refused.)"), cmd, c.settings);
+        if (!p.ok) { c.ran.declined++; return "Not run. " + p.why; }
+        const pty = (c.pty ||= new Pty());
+        const id = pty.start(cmd, c.root, a.cols, a.rows);
+        if (typeof id === "string") return id;
+        c.ran.commands++;
+        return `Started terminal ${id}. Type with pty_send id=${id}, read with pty_read id=${id}, stop with pty_stop id=${id}. Output so far:\n` + (await pty.read(id, { wait_ms: 1500 }));
+      }
+      case "pty_send": {
+        const pty = c.pty; if (!pty || !pty.sessions.has(+a.id)) return `Error: no terminal ${a.id}. Start one with pty_start.`;
+        const text = String(a.text ?? "");
+        const bad = typedProblem(pty.line(+a.id) + text, c.settings); // the whole line it makes, not only the new letters
+        if (bad) { c.ran.declined++; return "Not typed: " + bad; }
+        return pty.send(+a.id, text, { enter: !!a.enter });
+      }
+      case "pty_read": return a.id == null ? (c.pty?.list() || "No terminals.") : c.pty ? cut(await c.pty.read(+a.id, { wait_ms: a.wait_ms, max_chars: a.max_chars }), Math.max(c.profile.maxToolChars, 2000)) : `Error: no terminal ${a.id}.`;
+      case "pty_stop": return c.pty ? c.pty.stop(+a.id) : `Error: no terminal ${a.id}.`;
       case "bg_output": return a.id == null ? c.bg.list() : c.bg.output(+a.id, 4000);
       case "bg_stop": return c.bg.stop(+a.id);
       case "skill": {

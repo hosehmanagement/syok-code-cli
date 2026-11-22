@@ -28,7 +28,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - name: Windows tests (must pass)
-        run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts test/bridge.test.ts test/doctor.test.ts test/agents.test.ts test/mcp-http.test.ts test/symbols.test.ts test/cloud.test.ts test/confine.test.ts test/confine-win.test.ts test/mcp-auth.test.ts test/memory.test.ts test/lsp.test.ts test/setup.test.ts test/parallel.test.ts test/plugin-list.test.ts test/usage.test.ts test/claude-plugins.test.ts test/v07.test.ts test/compiled.test.ts
+        run: bun test test/shell.test.ts test/skills.test.ts test/perm-win.test.ts test/skillrun.test.ts test/bridge.test.ts test/doctor.test.ts test/agents.test.ts test/mcp-http.test.ts test/symbols.test.ts test/cloud.test.ts test/confine.test.ts test/confine-win.test.ts test/mcp-auth.test.ts test/memory.test.ts test/lsp.test.ts test/setup.test.ts test/parallel.test.ts test/plugin-list.test.ts test/usage.test.ts test/claude-plugins.test.ts test/v07.test.ts test/compiled.test.ts test/pty.test.ts
       - name: Which shell was picked
         run: bun -e "import('./src/shell.ts').then(m=>console.log(m.currentShell()))"
       - name: PowerShell shell test
@@ -62,7 +62,7 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           id -u
-      - run: bun test test/confine.test.ts test/action-e2e.test.ts
+      - run: bun test test/confine.test.ts test/action-e2e.test.ts test/pty.test.ts
       - name: syok doctor names the confinement tool as found
         run: |
           bun src/main.ts doctor | tee doctor.txt

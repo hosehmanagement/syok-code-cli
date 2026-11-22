@@ -294,7 +294,7 @@ if (process.argv[2] === "action") {
       c.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
       if (o.readOnly) c.allowed = READONLY;
       const res = await runAgent({ root: aroot, task, base, key, model: m, mode: "auto", settings: st, profile: pf, ctx: c, log: (x) => console.log(x) });
-      c.bg.stopAll();
+      c.bg.stopAll(); c.pty?.stopAll();
       return { summary: res.summary, stopped: res.stopped, touched: res.touched, usageLine: describeUsage(res.usage, st.prices), check: res.check };
     },
   });
@@ -377,7 +377,7 @@ const ctx = makeCtx(root, mode, ask, settings, profile);
 ctx.workflowEdits = (await import("./setup.ts")).workflowEdits(mine, { flag: has("--allow-workflow-edits"), env: process.env });
 if (ctx.workflowEdits.flag && ctx.workflowEdits.cloud) console.error("(--allow-workflow-edits is ignored inside GitHub Actions: workflow files stay protected there.)");
 if (settings.mcpServers) ctx.mcp = await startMcp(settings.mcpServers, root, (s) => console.error(s));
-const cleanup = () => { ctx.bg.stopAll(); ctx.mcp.forEach((x) => x.stop()); ctx.lsp?.stopAll(); cleanupParallel(); };
+const cleanup = () => { ctx.bg.stopAll(); ctx.pty?.stopAll(); ctx.mcp.forEach((x) => x.stop()); ctx.lsp?.stopAll(); cleanupParallel(); };
 process.on("exit", cleanup); process.on("SIGINT", () => { cleanup(); process.exit(130); });
 const onToken = !JSON_OUT && !has("--no-stream") ? (s: string) => process.stdout.write(s) : undefined;
 ctx.web = { base, key, exaKey: process.env.EXA_API_KEY || undefined, state: {} };
