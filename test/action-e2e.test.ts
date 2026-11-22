@@ -5,18 +5,18 @@ import { spawnSync, spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tmpProject, call } from "./helpers.ts";
+import { tmpProject, call, tmpDir } from "./helpers.ts";
 import { planConfine, probeConfine } from "../src/confine.ts";
 
 const unix = process.platform !== "win32";
-const bundle = join(mkdtempSync(join(tmpdir(), "syok-act-")), "syok.js");
+const bundle = join(tmpDir("syok-act-"), "syok.js");
 beforeAll(() => { const r = spawnSync("bun", ["build", join(import.meta.dir, "..", "src", "main.ts"), "--target=bun", "--minify", "--outfile", bundle], { encoding: "utf8" }); if (r.status !== 0) throw new Error(r.stderr); }, 120000);
 const git = (cwd: string, ...a: string[]) => { const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd, encoding: "utf8" }); if (r.status !== 0) throw new Error(r.stderr); return r.stdout.trim(); };
 
 test.if(unix)("a real run: comment in, AI edits a file, branch pushed, pull request asked for, answer posted; the AI's commands see no token", async () => {
-  const remote = mkdtempSync(join(tmpdir(), "remote-")); git(remote, "init", "-q", "--bare");
+  const remote = tmpDir("remote-"); git(remote, "init", "-q", "--bare");
   const work = tmpProject({ "a.js": "module.exports = 1;\n" }); git(work, "init", "-q"); git(work, "add", "-A"); git(work, "commit", "-qm", "first"); git(work, "branch", "-M", "main"); git(work, "remote", "add", "origin", remote); git(work, "push", "-q", "-u", "origin", "main");
-  const tools = mkdtempSync(join(tmpdir(), "fakegh-")); const record = join(tools, "calls.log"); const bodies = join(tools, "bodies");
+  const tools = tmpDir("fakegh-"); const record = join(tools, "calls.log"); const bodies = join(tools, "bodies");
   mkdirSync(bodies);
   writeFileSync(join(tools, "gh"), `#!/bin/sh\necho "$*" >> "${record}"\nprev=""\nfor a in "$@"; do if [ "$prev" = "--body-file" ]; then cp "$a" "${bodies}/$(date +%s%N).md"; fi; prev="$a"; done\ncase "$1 $2" in "pr view") echo false ;; "pr create") echo "https://github.com/me/app/pull/41" ;; esac\nexit 0\n`);
   chmodSync(join(tools, "gh"), 0o755);

@@ -10,18 +10,18 @@ import { realRun, type Run } from "../src/pr.ts";
 import { cleanEnv, SECRET_ENV } from "../src/shell.ts";
 import { makeCtx, runTool } from "../src/tools.ts";
 import { DEFAULT } from "../src/profiles.ts";
-import { tmpProject } from "./helpers.ts";
+import { tmpProject, tmpDir } from "./helpers.ts";
 
 const git = (cwd: string, ...a: string[]) => { const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", ...a], { cwd, encoding: "utf8" }); if (r.status !== 0) throw new Error("git " + a.join(" ") + ": " + r.stderr); return r.stdout.trim(); };
 /** A project checked out from a real (local) remote, like the runner's checkout. */
 function repo(files: Record<string, string> = { "a.js": "module.exports = 1;\n" }) {
-  const remote = mkdtempSync(join(tmpdir(), "remote-")); git(remote, "init", "-q", "--bare");
+  const remote = tmpDir("remote-"); git(remote, "init", "-q", "--bare");
   const work = tmpProject(files); git(work, "init", "-q"); git(work, "add", "-A"); git(work, "commit", "-qm", "first"); git(work, "branch", "-M", "main"); git(work, "remote", "add", "origin", remote); git(work, "push", "-q", "-u", "origin", "main");
   return { remote, work };
 }
 const comment = (body: string, o: any = {}) => ({ action: "created", comment: { id: 77, body, user: { login: o.login ?? "lau", type: o.type ?? "User" }, author_association: o.assoc ?? "OWNER" }, issue: { number: o.number ?? 12, title: o.title ?? "Value is wrong", body: o.issueBody ?? "It should be 2.", user: { login: "reporter" }, ...(o.pr ? { pull_request: {} } : {}) } });
 function harness(ev: any, name: string, agent: (task: string, o: { readOnly: boolean }, work: string) => Promise<AgentOutcome> | AgentOutcome, o: { files?: Record<string, string>; env?: Record<string, string>; gh?: (args: string[]) => { code: number; out: string } | undefined; prBranch?: string } = {}) {
-  const r = repo(o.files); const evFile = join(mkdtempSync(join(tmpdir(), "ev-")), "event.json"); writeFileSync(evFile, JSON.stringify(ev));
+  const r = repo(o.files); const evFile = join(tmpDir("ev-"), "event.json"); writeFileSync(evFile, JSON.stringify(ev));
   if (o.prBranch) { git(r.work, "checkout", "-q", "-b", o.prBranch); writeFileSync(join(r.work, "pr.txt"), "pr work\n"); git(r.work, "add", "-A"); git(r.work, "commit", "-qm", "pr work"); git(r.work, "push", "-q", "-u", "origin", o.prBranch); git(r.work, "checkout", "-q", "main"); }
   const ghCalls: string[][] = []; const bodies: string[] = []; const tasks: string[] = []; const logs: string[] = [];
   const run: Run = (cmd, args, cwd) => {

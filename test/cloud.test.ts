@@ -7,11 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sendToCloud } from "../src/cloud.ts";
 import { realRun, type Run } from "../src/pr.ts";
-import { tmpProject } from "./helpers.ts";
+import { tmpProject, tmpDir } from "./helpers.ts";
 
 const git = (cwd: string, ...a: string[]) => { const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", ...a], { cwd, encoding: "utf8" }); if (r.status !== 0) throw new Error("git " + a.join(" ") + ": " + r.stderr); return r.stdout.trim(); };
 function setup(o: { workflow?: boolean; gh?: (args: string[]) => { code: number; out: string } | undefined } = {}) {
-  const remote = mkdtempSync(join(tmpdir(), "remote-")); git(remote, "init", "-q", "--bare");
+  const remote = tmpDir("remote-"); git(remote, "init", "-q", "--bare");
   const work = tmpProject({ "a.js": "module.exports = 1;\n", ".gitignore": "node_modules\n" }); git(work, "init", "-q"); git(work, "add", "-A"); git(work, "commit", "-qm", "first"); git(work, "branch", "-M", "main"); git(work, "remote", "add", "origin", remote); git(work, "push", "-q", "-u", "origin", "main");
   const gh: string[][] = []; const bodies: Record<string, string> = {}; const asked: { what: string; detail: string }[] = [];
   const run: Run = (cmd, args, cwd) => {

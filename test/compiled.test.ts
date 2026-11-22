@@ -5,11 +5,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { selfArgs, jobInfo, jobLog } from "../src/jobs.ts";
-import { tmpProject, call } from "./helpers.ts";
+import { tmpProject, call, tmpDir } from "./helpers.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function waitFor(f: () => boolean, ms = 20000) { const t = Date.now(); while (Date.now() - t < ms) { if (f()) return true; await sleep(100); } return false; }
-const exe = join(mkdtempSync(join(tmpdir(), "syok-bin-")), process.platform === "win32" ? "syok.exe" : "syok");
+const exe = join(tmpDir("syok-bin-"), process.platform === "win32" ? "syok.exe" : "syok");
 
 beforeAll(() => {
   const r = spawnSync("bun", ["build", "--compile", join(import.meta.dir, "..", "src", "main.ts"), "--outfile", exe], { encoding: "utf8" });

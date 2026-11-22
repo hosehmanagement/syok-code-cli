@@ -11,6 +11,7 @@ import { dockerBackend, modalBackend, MERGE, type Backend, type Sandbox } from "
 import { solveInstance, quickGrade } from "../bench/swebench/run.ts";
 import type { Adapter } from "../bench/adapters/types.ts";
 import { noUsage } from "../bench/adapters/types.ts";
+import { tmpDir } from "./helpers.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const row = (o: any = {}) => ({ instance_id: "owner__repo-1", repo: "owner/repo", base_commit: "a".repeat(40), problem_statement: "It breaks.", FAIL_TO_PASS: '["t.py::test_a"]', PASS_TO_PASS: '["t.py::test_b"]', ...o });
@@ -27,7 +28,7 @@ test("both dataset formats: lists as JSON text (princeton-nlp) or real lists wit
   expect(b.image).toBe("img:1"); expect(b.imageFromRow).toBe(true); expect(b.eval_script).toBe("#!/bin/bash");
   expect(() => normalize({ instance_id: "x" })).toThrow(/repo is missing/);
   expect(() => normalize(row({ FAIL_TO_PASS: "nope" }))).toThrow(/FAIL_TO_PASS/);
-  const d = mkdtempSync(join(tmpdir(), "sb-")); writeFileSync(join(d, "a.jsonl"), JSON.stringify(row()) + "\n" + JSON.stringify(row({ instance_id: "b__c-2" })) + "\n");
+  const d = tmpDir("sb-"); writeFileSync(join(d, "a.jsonl"), JSON.stringify(row()) + "\n" + JSON.stringify(row({ instance_id: "b__c-2" })) + "\n");
   expect(readDataset(join(d, "a.jsonl")).map((x) => x.instance_id)).toEqual(["owner__repo-1", "b__c-2"]);
   writeFileSync(join(d, "a.json"), JSON.stringify([row()]));
   expect(readDataset(join(d, "a.json")).length).toBe(1);
@@ -117,7 +118,7 @@ function localBackend(): { be: Backend; dirs: string[] } {
   const be: Backend = {
     name: "local", problem: async () => null,
     async start() {
-      const d = mkdtempSync(join(tmpdir(), "sb-testbed-")); dirs.push(d);
+      const d = tmpDir("sb-testbed-"); dirs.push(d);
       const g = (...a: string[]) => spawnSync("git", ["-c", "user.email=a@b", "-c", "user.name=a", ...a], { cwd: d, encoding: "utf8" });
       g("init", "-q"); writeFileSync(join(d, "app.py"), "v = 1\n"); g("add", "-A"); g("commit", "-qm", "base", "--date", "2026-01-01T00:00:00Z");
       mkdirSync(join(d, "build")); writeFileSync(join(d, "build", "junk.py"), "built\n"); // untracked output already in the image
@@ -143,7 +144,7 @@ test("solveInstance: the patch holds the tool's edits and new files, NOT the unt
     command: () => ({ cmd: ["sh", "-c", "printf 'v = 2\\n' > app.py && printf 'new\\n' > added.py && echo '{\"usage\":{\"input\":5,\"output\":2,\"total\":7}}'"], enforced: [] }),
     parse: (out) => ({ ...noUsage(), totalTokens: out.includes('"total":7') ? 7 : null }) };
   const x: Instance = normalize(row({ base_commit: base }));
-  const logDir = mkdtempSync(join(tmpdir(), "sb-logs-"));
+  const logDir = tmpDir("sb-logs-");
   const { patch, report } = await solveInstance(x, { backend: be, tool: "fake", adapter: tool, model: "m", timeoutSec: 60, doGrade: false, skipInstall: true, logDir });
   expect(report.error).toBeUndefined();
   expect(report.headMatchesBase).toBe(true);
@@ -159,7 +160,7 @@ test("gold pseudo-tool + quick grade: the reference patch is applied in a fresh 
   const gold = "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-v = 1\n+v = 2\n";
   const evalScript = "#!/bin/bash\nset -uxo pipefail\ncd /testbed\n: '>>>>> Start Test Output'\nif grep -q 'v = 2' app.py; then echo 'PASSED t.py::test_a'; else echo 'FAILED t.py::test_a'; fi\necho 'PASSED t.py::test_b'\n: '>>>>> End Test Output'\n";
   const x = normalize(row({ base_commit: base, patch: gold, eval_script: evalScript, FAIL_TO_PASS: ["t.py::test_a"], PASS_TO_PASS: ["t.py::test_b"] }));
-  const o = { backend: be, tool: "gold", model: "gold", timeoutSec: 60, doGrade: true, logDir: mkdtempSync(join(tmpdir(), "sb-logs-")) };
+  const o = { backend: be, tool: "gold", model: "gold", timeoutSec: 60, doGrade: true, logDir: tmpDir("sb-logs-") };
   const { patch, report } = await solveInstance(x, o);
   expect(report.error).toBeUndefined(); expect(patch).toContain("+v = 2");
   const g: any = await quickGrade(x, patch, o);
@@ -173,7 +174,7 @@ test("gold pseudo-tool + quick grade: the reference patch is applied in a fresh 
 // ---------- the real thing: Docker, when it is running (it is on GitHub's Linux machines) ----------
 const dockerUp = spawnSync("docker", ["info", "--format", "{{.ServerVersion}}"], { encoding: "utf8" }).status === 0;
 test.skipIf(!dockerUp)("REAL Docker: build a tiny instance image, run the CLI with the gold pseudo-tool, write predictions.jsonl, quick-grade it", async () => {
-  const d = mkdtempSync(join(tmpdir(), "sb-docker-"));
+  const d = tmpDir("sb-docker-");
   const tag = "syok-bench-test-instance:" + Date.now();
   writeFileSync(join(d, "Dockerfile"), [
     // A small public image that already has git, bash and coreutils (nothing is installed: containers may have no network).

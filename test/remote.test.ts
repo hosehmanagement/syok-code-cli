@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { pickFiles, optionProblems, defaultImage, remoteRun, remoteLogs, remoteStop, describeRuns, listRuns, readRun, detachLine, type Provider, type Box, type BoxOptions } from "../src/remote.ts";
 import { remoteCommand, parseRunArgs, joinCommand } from "../src/remote-cli.ts";
 import { modalHasToken, MODAL_SETUP } from "../src/remote-modal.ts";
-import { tmpProject } from "./helpers.ts";
+import { tmpProject, tmpDir } from "./helpers.ts";
 
 const unix = process.platform !== "win32";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -38,7 +38,7 @@ function fakeCloud(o: { problem?: string | null; failCreate?: string } = {}) {
   const p: Provider = {
     name: "FakeCloud",
     problem: async () => o.problem ?? null,
-    create: async (opts) => { if (o.failCreate) throw new Error(o.failCreate); const id = "sb-" + (boxes.size + 1); boxes.set(id, { dir: mkdtempSync(join(tmpdir(), "fakebox-")), on: true, opts, procs: new Set() }); log.push("create " + id); return make(id); },
+    create: async (opts) => { if (o.failCreate) throw new Error(o.failCreate); const id = "sb-" + (boxes.size + 1); boxes.set(id, { dir: tmpDir("fakebox-"), on: true, opts, procs: new Set() }); log.push("create " + id); return make(id); },
     attach: async (id) => { const b = boxes.get(id); if (!b || !b.on) throw new Error("sandbox " + id + " not found"); return make(id); },
     close: () => { log.push("close"); },
   };

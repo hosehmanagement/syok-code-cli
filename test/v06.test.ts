@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { tmpProject, fakeAI, call } from "./helpers.ts";
+import { tmpProject, fakeAI, call, tmpDir } from "./helpers.ts";
 import { runAgent, makeCtx, loadInstructions } from "../src/agent.ts";
 import { runTool } from "../src/tools.ts";
 import { DEFAULT } from "../src/profiles.ts";
@@ -18,7 +18,7 @@ import { reviewTask, openPr, slug } from "../src/pr.ts";
 import { allowCommand, allowEdit, MODES } from "../src/perm.ts";
 import { sandboxExec } from "../src/sandbox.ts";
 
-const home = () => mkdtempSync(join(tmpdir(), "syok-home-"));
+const home = () => tmpDir("syok-home-");
 const MAIN = join(import.meta.dir, "../src/main.ts");
 
 test("sessions: saved, listed newest first, loaded by last / number / id start", async () => {
