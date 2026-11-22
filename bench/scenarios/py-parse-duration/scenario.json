@@ -1,0 +1,28 @@
+{
+  "id": "py-parse-duration",
+  "title": "From evals/make_tasks.py: py-parse-duration",
+  "source": {
+    "type": "dir",
+    "path": "repo"
+  },
+  "prompt": "parse_duration() in duration.py should turn strings like '1h30m', '45s', '2d' or '1d2h3m4s' into a number of seconds, but it gives wrong answers. Fix it. Raise ValueError for anything that is not one or more number+unit pairs using only d, h, m or s: an empty string, 'abc', '5x' and a bare number like '10' must all raise. Run the tests when done. Do not edit the existing test files.",
+  "limits": {
+    "timeSec": 600,
+    "maxSteps": 40,
+    "maxCostUsd": 1
+  },
+  "tests": [
+    {
+      "name": "existing tests",
+      "command": "python3 -m unittest discover -s tests -p test_duration.py"
+    }
+  ],
+  "protected": [
+    "tests/test_duration.py"
+  ],
+  "grader": {
+    "command": "python3 -m unittest discover -s tests",
+    "files": "grader",
+    "timeSec": 120
+  }
+}

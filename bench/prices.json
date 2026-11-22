@@ -1,0 +1,5 @@
+{
+  "_readme": "US dollars per MILLION tokens, used only when a tool does not report its own cost (Codex, Syok, Cursor). Keys are matched against the pinned model name (longest match wins). Copy the CURRENT prices from each provider's pricing page. None are filled in on purpose: prices change, and a wrong number would make the results table lie.",
+  "_example": { "some-model-name": { "in": 1.0, "out": 5.0 } },
+  "prices": {}
+}
