@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   TOOL_INPUT_RE, LANE_SECRETS, adapterOf, sameModel, modelPart, checkLaneInputs, laneMatrix,
-  createUserCommand, runAsCommand, giveFolderCommand, takeBackFolderCommand, BENCH_USER, BENCH_HOME,
+  createUserCommand, runAsCommand, giveFolderCommand, takeBackFolderCommand, stopUserProcessesCommand, BENCH_USER, BENCH_HOME,
 } from "../bench/swebench/lane.ts";
 import { claude, claudeVersionSpec } from "../bench/adapters/claude.ts";
 import { syok } from "../bench/adapters/syok.ts";
@@ -99,6 +99,8 @@ test("run-as commands: the user is created once with root's shell setup, the fol
   expect(runAsCommand("echo 'hi' && x")).toBe(`runuser -u ${BENCH_USER} -- env HOME=${BENCH_HOME} PATH="$PATH" sh -c 'echo '\\''hi'\\'' && x' </dev/null`);
   expect(giveFolderCommand("/testbed")).toBe(`stat -c '%u:%g' /testbed > /tmp/syok-testbed-owner.txt && test -s /tmp/syok-testbed-owner.txt && chown -R ${BENCH_USER}: /testbed`);
   expect(takeBackFolderCommand("/testbed")).toBe(`test -s /tmp/syok-testbed-owner.txt && chown -R "$(cat /tmp/syok-testbed-owner.txt)" /testbed`);
+  expect(stopUserProcessesCommand()).toBe(`runuser -u ${BENCH_USER} -- sh -c 'kill -9 -1 2>/dev/null; true' </dev/null`);
+  expect(() => stopUserProcessesCommand("x y")).toThrow(/not allowed/);
   expect(() => runAsCommand("x", "root; rm -rf /")).toThrow(/not allowed/);
   expect(() => createUserCommand("ok", "/home/x y")).toThrow(/not allowed/);
   expect(() => giveFolderCommand("/testbed; rm -rf /")).toThrow(/not allowed/);
@@ -173,9 +175,9 @@ test("solveInstance: a run-as tool gets /testbed only while it runs, then the pa
   expect(report.error).toBeUndefined();
   expect(patch).toContain("diff --git a/app.py");
   const i = (s: string) => cmds.findIndex((c) => c.c.includes(s));
-  const install = i("useradd"), ver = i("--version"), give = i("chown -R syokbench: /testbed"), tool = i("--output-format"), back = i('chown -R "$(cat /tmp/syok-testbed-owner.txt)" /testbed'), diff = i("git diff --binary");
-  for (const k of [install, ver, give, tool, back, diff]) expect(k).toBeGreaterThanOrEqual(0);
-  expect(install < give && give < tool && tool < back && back < diff && ver < tool).toBe(true);
+  const install = i("useradd"), ver = i("--version"), give = i("chown -R syokbench: /testbed"), tool = i("--output-format"), stop = i("kill -9 -1"), back = i('chown -R "$(cat /tmp/syok-testbed-owner.txt)" /testbed'), diff = i("git diff --binary");
+  for (const k of [install, ver, give, tool, stop, back, diff]) expect(k).toBeGreaterThanOrEqual(0);
+  expect(install < give && give < tool && tool < stop && stop < back && back < diff && ver < tool).toBe(true);
   const t = cmds[tool];
   expect(t.c.startsWith("runuser -u syokbench -- env HOME=/home/syokbench")).toBe(true); expect(t.c.endsWith("</dev/null")).toBe(true);
   expect(t.c).toContain(`export ANTHROPIC_DEFAULT_HAIKU_MODEL='\\''claude-sonnet-5'\\''; `); // quoted once for export, once for runuser's sh -c

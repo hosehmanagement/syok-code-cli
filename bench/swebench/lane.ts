@@ -63,6 +63,13 @@ export function runAsCommand(line: string, user = BENCH_USER, home = BENCH_HOME)
   checkUser(user, home);
   return `runuser -u ${user} -- env HOME=${home} PATH="$PATH" sh -c ${shq(line)} </dev/null`;
 }
+/** After the run: stop every process the user still has (a background command the tool started, or one that outlived the
+ *  time limit in its own session), so nothing changes /testbed while the patch is taken. kill -1 as that user signals all
+ *  of the user's processes except the shell sending it; it is a shell builtin, so no extra package is needed. */
+export function stopUserProcessesCommand(user = BENCH_USER): string {
+  checkUser(user);
+  return `runuser -u ${user} -- sh -c 'kill -9 -1 2>/dev/null; true' </dev/null`;
+}
 const OWNER_FILE = "/tmp/syok-testbed-owner.txt";
 /** Before the tool runs: remember who owns the project folder, then give it to the user. */
 export function giveFolderCommand(dir: string, user = BENCH_USER): string {

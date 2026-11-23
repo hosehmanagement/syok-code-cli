@@ -25,7 +25,7 @@ import { readDataset, select, predictionLine, promptFor, type Instance } from ".
 import { dockerBackend, modalBackend, type Backend, type Sandbox } from "./backends.ts";
 import { grade, type Grade } from "./grade.ts";
 import { loadPrices, type Prices } from "../lib/bench.ts";
-import { adapterOf, ANTHROPIC_BASE, runAsCommand, giveFolderCommand, takeBackFolderCommand, sameModel } from "./lane.ts";
+import { adapterOf, ANTHROPIC_BASE, runAsCommand, giveFolderCommand, takeBackFolderCommand, stopUserProcessesCommand, sameModel } from "./lane.ts";
 
 export interface InstanceReport {
   instance_id: string; image: string; tool: string; model: string;
@@ -191,6 +191,7 @@ export async function solveInstance(x: Instance, o: InstanceOpts): Promise<{ pat
       const r = await box.exec(asUser(envLine + c.cmd.map(q).join(" ")), { cwd: TESTBED, timeoutSec: o.timeoutSec, env: ad.authEnv });
       rep.toolSeconds = Math.round((Date.now() - t0) / 1000); rep.toolExit = r.code; rep.toolTimedOut = r.timedOut;
       if (ad.runAs) {
+        await box.exec(stopUserProcessesCommand(ad.runAs.user), { timeoutSec: 60 });
         const b = await box.exec(takeBackFolderCommand(TESTBED), { timeoutSec: 600 });
         if (b.code !== 0) throw new Error(`could not give ${TESTBED} back to its owner after the run: ` + b.out.trim().slice(-300));
       }
