@@ -174,7 +174,10 @@ bun bench/swebench/run.ts --dataset verified.jsonl --n 5 --seed 42 --tool syok -
 - The tool is installed inside the container (`containerInstall` in its adapter) and its login is passed in by variable
   **name** (`SYOK_API_KEY`, `ANTHROPIC_API_KEY`, `CODEX_API_KEY`, `CURSOR_API_KEY`, ...). `--skip-install` if your image already
   has the tool. The containers need internet access for the install and the AI calls.
-- The patch is everything the tool changed in `/testbed` as a `git diff`, without untracked files that were already in the image.
+- The patch is everything the tool changed in `/testbed`: the difference between a snapshot taken just before the tool starts
+  and one taken after it stops (git trees written through a separate index, so the repository itself is not touched). Edits the
+  image had already made to tracked files (the sphinx images change `tox.ini` during setup) and untracked files already in the
+  image stay out of the patch; `imageChangedFiles` in results.json records how many tracked files the image had changed.
 - Images are big (several GB each), and the official advice is an x86_64 machine with about 120 GB free disk, 16 GB RAM and
   8 CPU cores for a full run.
 
@@ -194,7 +197,10 @@ Actions > "bench pilot (SWE-bench Verified)" > Run workflow. It runs on GitHub's
 on your computer. Inputs: `tool` (`gold`, `noop`, `syok`, or a comma list such as `gold,noop`), `n` (default 5, fixed seed
 42) or `ids`, `model`, `max_spend_usd` (default 5), `cost_per_instance_usd`, `max_steps`, `timeout_sec`, `official`. For
 `syok` it builds Syok Code from the commit being run and puts that build in the containers (`SYOK_BENCH_BUNDLE`), with the
-repository secrets `SYOK_BASE_URL` and `SYOK_API_KEY` (the address is hidden in the logs and removed from the uploaded files).
+repository secrets `SYOK_BASE_URL` and `SYOK_API_KEY` (the address is hidden in the logs; `bench/swebench/scrub.ts` removes
+the key and the address from every file and checks that none is left before the summary is written and the files are
+uploaded, and deletes the files if one is). `bench/swebench/summary.ts` writes the summary: per instance, the official
+harness result next to the quick grade, with any disagreement marked (the official result is the one to report).
 After the quick grade it grades the same predictions with the official harness (`pip install swebench==5.0.2`,
 `swebench eval verified`). The job summary shows both; the artifact holds `predictions.jsonl`, `results.json`, `results.md`,
 the official report and all logs. The pilot's instances were fixed before any run in `bench/swebench/pilot-ids.txt`.

@@ -11,6 +11,8 @@ import { dockerBackend, modalBackend, MERGE, type Backend, type Sandbox } from "
 import { solveInstance, quickGrade, instanceCost, outcomeOf, resultsTable } from "../bench/swebench/run.ts";
 import type { Adapter } from "../bench/adapters/types.ts";
 import { syok } from "../bench/adapters/syok.ts";
+import { scrub } from "../bench/swebench/scrub.ts";
+import { pilotSummary, officialStatus } from "../bench/swebench/summary.ts";
 import { noUsage } from "../bench/adapters/types.ts";
 import { tmpDir } from "./helpers.ts";
 
@@ -120,7 +122,8 @@ function localBackend(): { be: Backend; dirs: string[] } {
     name: "local", problem: async () => null,
     async start() {
       const d = tmpDir("sb-testbed-"); dirs.push(d);
-      const g = (...a: string[]) => spawnSync("git", ["-c", "user.email=a@b", "-c", "user.name=a", ...a], { cwd: d, encoding: "utf8" });
+      // A fixed committer date too, so every "image" has the same base commit (otherwise two starts a second apart differ).
+      const g = (...a: string[]) => spawnSync("git", ["-c", "user.email=a@b", "-c", "user.name=a", ...a], { cwd: d, encoding: "utf8", env: { ...process.env, GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" } });
       g("init", "-q"); writeFileSync(join(d, "app.py"), "v = 1\n"); g("add", "-A"); g("commit", "-qm", "base", "--date", "2026-01-01T00:00:00Z");
       mkdirSync(join(d, "build")); writeFileSync(join(d, "build", "junk.py"), "built\n"); // untracked output already in the image
       const tmp = join(d, ".tmp"); mkdirSync(tmp); writeFileSync(join(d, ".git", "info", "exclude"), ".tmp/\n");
@@ -175,6 +178,61 @@ test("solveInstance passes --max-steps to the tool and records which models answ
   expect(priced.report.costSource).toBe("prices");
   expect(priced.report.costUsd).toBeCloseTo((40 * 1 + 5 * 2 + 60 * 10 + 15 * 20) / 1e6, 12);
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+test("an image that already changed a tracked file (like the sphinx images' tox.ini): noop gives an EMPTY patch, and a tool's patch holds only its own change", async () => {
+  const { be: inner, dirs } = localBackend();
+  // The image's own setup edits a tracked file and leaves a modified, committed-nowhere line in it.
+  const be: Backend = { ...inner, async start(i, o) { const b = await inner.start(i, o); writeFileSync(join(b.id, "app.py"), "v = 1\n# setup edit\n"); return b; } };
+  const probe = await inner.start("x", { timeoutSec: 10 }); const base = head(probe.id);
+  const x: Instance = normalize(row({ base_commit: base }));
+  const logDir = tmpDir("sb-logs-");
+  const noop = await solveInstance(x, { backend: be, tool: "noop", model: "noop", timeoutSec: 60, doGrade: false, logDir });
+  expect(noop.report.error).toBeUndefined();
+  expect(noop.report.imageChangedFiles).toBe(1);
+  expect(noop.patch).toBe(""); expect(noop.report.patchBytes).toBe(0);
+  const tool: Adapter = { name: "fake", label: "edit tool", docs: [], unverified: [], containerInstall: [], async check() { return { installed: true, loggedIn: true, version: "", detail: "" }; },
+    command: () => ({ cmd: ["sh", "-c", "printf 'v = 2\\n# setup edit\\n' > app.py && printf 'new\\n' > added.py && git -c user.email=a@b -c user.name=a commit -qam 'tool committed anyway'"], enforced: [] }), parse: () => noUsage() };
+  const ed = await solveInstance(x, { backend: be, tool: "fake", adapter: tool, model: "m", timeoutSec: 60, doGrade: false, skipInstall: true, logDir });
+  expect(ed.report.error).toBeUndefined();
+  expect(ed.patch).toContain("-v = 1"); expect(ed.patch).toContain("+v = 2");
+  expect(ed.patch).not.toContain("+# setup edit"); // the image's own edit is in both snapshots, so not in the patch
+  expect(ed.patch).toContain("diff --git a/added.py b/added.py");
+  expect(ed.patch).not.toContain("junk.py");
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+test("scrub: every secret value is replaced byte for byte in every file, nothing is left, short or empty values are ignored", () => {
+  const d = tmpDir("sb-scrub-");
+  mkdirSync(join(d, "run", "logs"), { recursive: true });
+  const key = "sk-syok-SECRET-1234567890", host = "syok-ai-router-personal-abc123.example.workers.dev";
+  writeFileSync(join(d, "run", "logs", "a.tool.txt"), `error: could not reach https://${host}/v1 with ${key}\nagain ${host}\n`);
+  writeFileSync(join(d, "run", "bin.dat"), Buffer.concat([Buffer.from([0, 255, 1]), Buffer.from(key), Buffer.from([0])]));
+  writeFileSync(join(d, "run", "clean.txt"), "nothing here");
+  const r = scrub(d, [key, `https://${host}/v1`, host, "abc123", "", "ab"]);
+  expect(r.left).toEqual([]); expect(r.changed).toBe(2);
+  const t = readFileSync(join(d, "run", "logs", "a.tool.txt"), "utf8");
+  expect(t).not.toContain(key); expect(t).not.toContain(host); expect(t).not.toContain("abc123"); expect(t).toContain("<hidden>");
+  expect(readFileSync(join(d, "run", "bin.dat"))).toEqual(Buffer.concat([Buffer.from([0, 255, 1]), Buffer.from("<hidden>"), Buffer.from([0])]));
+  expect(readFileSync(join(d, "run", "clean.txt"), "utf8")).toBe("nothing here");
+  expect(scrub(join(d, "missing"), [key])).toEqual({ changed: 0, left: [] });
+  // The CLI: values by variable NAME, exit 0 when clean, nothing secret printed.
+  writeFileSync(join(d, "run", "again.txt"), key);
+  const c = spawnSync("bun", ["bench/swebench/scrub.ts", d, "SB_TEST_KEY", "SB_TEST_EMPTY"], { cwd: ROOT, encoding: "utf8", env: { ...process.env, SB_TEST_KEY: key, SB_TEST_EMPTY: "" } });
+  expect(c.status).toBe(0); expect(c.stdout + c.stderr).not.toContain(key);
+  expect(readFileSync(join(d, "run", "again.txt"), "utf8")).toBe("<hidden>");
+  rmSync(d, { recursive: true, force: true });
+});
+test("summary: per-instance OFFICIAL harness result next to the quick grade, with disagreements marked", () => {
+  const d = tmpDir("sb-sum-"); const run = join(d, "2026-gold"); mkdirSync(run);
+  writeFileSync(join(run, "results.json"), JSON.stringify({ reports: [{ instance_id: "a__a-1", outcome: "wrong-patch" }, { instance_id: "b__b-2", outcome: "resolved" }, { instance_id: "c__c-3", outcome: "no-patch" }] }));
+  writeFileSync(join(run, "results.md"), "### table\n");
+  writeFileSync(join(run, "gold.pilot-2026-gold.json"), JSON.stringify({ submitted_instances: 3, completed_instances: 2, resolved_instances: 2, empty_patch_instances: 1, error_instances: 0, resolved_ids: ["a__a-1", "b__b-2"], unresolved_ids: [], empty_patch_ids: ["c__c-3"], error_ids: [] }));
+  const s = pilotSummary(d);
+  expect(s).toContain("**Official SWE-bench harness: 2/3 resolved**");
+  expect(s).toContain("| a__a-1 | resolved | wrong-patch | **no** (report the official one) |");
+  expect(s).toContain("| b__b-2 | resolved | resolved | yes |");
+  expect(s).toContain("| c__c-3 | empty patch | no-patch | yes |");
+  expect(officialStatus(null, "x")).toBe("not graded");
+  rmSync(d, { recursive: true, force: true });
 });
 test("instanceCost: the tool's own number first; one unpriced model makes the run unknown (never guessed)", () => {
   expect(instanceCost({ costUsd: 0.5 }, {})).toEqual({ usd: 0.5, source: "tool" });

@@ -153,46 +153,30 @@ jobs:
             tail -n 20 "$d/official.txt"
             echo "::endgroup::"
           done
+      - name: Remove the Syok address and key from the files before upload
+        # Runs BEFORE the summary is written, so the summary and the artifact are both built from scrubbed files.
+        # bench/swebench/scrub.ts replaces every value byte for byte, checks that none is left, and deletes the files
+        # (and fails this step) if one is. The values are passed by variable name and never printed.
+        if: always()
+        env:
+          U: ${{ secrets.SYOK_BASE_URL }}
+        shell: bash
+        run: |
+          h="${U#*://}"; h="${h%%/*}"
+          a="${h#syok-ai-router-personal-}"; a="${a%%.*}"; [ "$a" = "$h" ] && a=""
+          SYOK_HOST="$h" SYOK_ACCT="$a" bun bench/swebench/scrub.ts "$RUNNER_TEMP/pilot" SYOK_API_KEY SYOK_BASE_URL SYOK_HOST SYOK_ACCT
       - name: Write the summary table
         if: always()
         shell: bash
         run: |
-          cd "$RUNNER_TEMP/pilot" 2>/dev/null || { echo "No results." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           {
             echo "## SWE-bench Verified pilot"
             echo "Commit: \`$GITHUB_SHA\`. Instances: \`${SELECTION:-?}\`. Harness: swebench $SWEBENCH_VERSION."
             echo
-            for d in */; do
-              d="${d%/}"
-              [ -f "$d/results.md" ] && cat "$d/results.md"
-              rep=$(ls "$d"/*."pilot-$d".json 2>/dev/null | head -n 1)
-              if [ -n "$rep" ]; then
-                python - "$rep" <<'PY'
-          import json, sys
-          r = json.load(open(sys.argv[1]))
-          print(f"\n**Official SWE-bench harness: {r.get('resolved_instances')}/{r.get('submitted_instances')} resolved** "
-                f"(completed {r.get('completed_instances')}, empty patch {r.get('empty_patch_instances')}, errors {r.get('error_instances')}).")
-          print(f"Resolved: {', '.join(r.get('resolved_ids') or []) or 'none'}. Unresolved: {', '.join(r.get('unresolved_ids') or []) or 'none'}. "
-                f"Empty patch: {', '.join(r.get('empty_patch_ids') or []) or 'none'}. Errors: {', '.join(r.get('error_ids') or []) or 'none'}.\n")
-          PY
-              elif [ -f "$d/official.txt" ]; then echo; echo "Official harness: no report file (see official.txt in the artifact)."; echo; fi
-            done
-          } | tee results-summary.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Remove the Syok address and key from the files before upload
-        if: always()
-        env:
-          U: ${{ secrets.SYOK_BASE_URL }}
-          K: ${{ secrets.SYOK_API_KEY }}
-        shell: bash
-        run: |
-          cd "$RUNNER_TEMP/pilot" 2>/dev/null || exit 0
-          h="${U#*://}"; h="${h%%/*}"
-          for v in "$K" "$h"; do
-            [ -n "$v" ] || continue
-            grep -rlF -- "$v" . 2>/dev/null | while read -r f; do V="$v" python -c "import os,sys; p=sys.argv[1]; s=open(p,encoding='utf-8',errors='surrogateescape').read(); open(p,'w',encoding='utf-8',errors='surrogateescape').write(s.replace(os.environ['V'],'<hidden>'))" "$f"; done
-          done
-          if [ -n "$h" ] && grep -rqF -- "$h" .; then echo "the address is still in a file; not uploading"; rm -rf ./*; fi
-          exit 0
+            bun bench/swebench/summary.ts "$RUNNER_TEMP/pilot"
+          } > "$RUNNER_TEMP/results-summary.md"
+          cat "$RUNNER_TEMP/results-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ -d "$RUNNER_TEMP/pilot" ]; then cp "$RUNNER_TEMP/results-summary.md" "$RUNNER_TEMP/pilot/results-summary.md"; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
