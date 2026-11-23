@@ -206,7 +206,10 @@ console.log("SAVED_DONE_1_4=" + ((s.todos || []).slice(0, 4).length === 4 && (s.
 grep -q "^REINJECTED=yes" "$W/todo-check.txt" && ok "todo: the saved chat has the todo list put back right after the summary" || bad "todo: the todo list was not put back after the summary"
 grep -q "^ORDER=12345$" "$W/todo-check.txt" && grep -q "^CODE_IN_LIST=yes" "$W/todo-check.txt" && ok "todo: the list put back keeps the item order 1-5 and the code in item 5" || bad "todo: the list put back lost the order or the code"
 grep -q "^SAVED_IDS=12345$" "$W/todo-check.txt" && grep -q "^SAVED_DONE_1_4=yes" "$W/todo-check.txt" && ok "todo: the saved list has items 1-5 in order, 1-4 done" || bad "todo: the saved list is wrong"
-[ "$(cat "$P/out/one.txt" "$P/out/two.txt" "$P/out/three.txt" "$P/out/four.txt" 2>/dev/null | tr -s ' \n' ' ' | sed 's/ $//')" = "alpha beta gamma delta" ] && ok "todo: the four files were made across the sessions (checked on disk)" || bad "todo: out/one..four.txt are not alpha beta gamma delta"
+# each file on its own: the word, with only surrounding blank space allowed (a file written without a final newline is fine)
+ftxt() { [ -f "$P/out/$1.txt" ] && sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$P/out/$1.txt" | grep -v '^$' | paste -sd'/' - || echo "(missing)"; }
+FILES="one=$(ftxt one) two=$(ftxt two) three=$(ftxt three) four=$(ftxt four)"
+[ "$FILES" = "one=alpha two=beta three=gamma four=delta" ] && ok "todo: the four files were made across the sessions (checked on disk)" || bad "todo: out/*.txt are wrong: $FILES"
 grep -q "$CODE" "$W/todo3.txt" && ok "todo: the last answer has the release code $CODE (its file was deleted after session 1)" || bad "todo: the last answer lacks the release code $CODE"
 grep -q "^CODE_IN_SUMMARY=yes" "$W/todo-check.txt" && echo "NOTE todo: the AI's summary also kept the code, so the answer could have come from either" || echo "NOTE todo: the summary did not keep the code: the answer came from the todo list put back"
 
@@ -221,7 +224,13 @@ if [ -x "$LS" ]; then
   ( cd "$P" && "$REPO/node_modules/.bin/tsc" -p . > "$W/rename-before.txt" 2>&1 ) && ok "rename: the project compiles before (checked with the real compiler)" || { bad "rename: the project does not compile before"; cat "$W/rename-before.txt"; }
   ai "$W/rename.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Rename the function calcTotal that is defined on line 1 of src/pricing.ts to computeOrderTotal, everywhere it is used. Use the lsp tool's rename action for it (path src/pricing.ts, line 1, symbol calcTotal, new_name computeOrderTotal), not edit_file and not search and replace. The method calcTotal of the class Cart is a different thing and keeps its name. Then tell me which files changed."; tail -15 "$W/rename.txt"; echo "(model: $(who "$W/rename.txt"))"
   grep -q '> lsp {"action":"rename"' "$W/rename.txt" && ok "rename: the AI used lsp rename" || bad "rename: the AI did not use lsp rename"
-  if grep -Eq '^> (edit_file|write_file|run_command)' "$W/rename.txt"; then bad "rename: the AI also edited files or ran commands by hand"; else ok "rename: no hand edits or commands were needed"; fi
+  # The changes must come from the rename itself: no hand edits, and the rename's own reply (in the saved chat) applied all
+  # 6 changes in the 3 files. Commands the AI ran afterwards to check its work (Syok Code asks it to run checks) are allowed,
+  # since the exact file contents below and this reply show the rename did all of the work.
+  if grep -Eq '^> (edit_file|write_file)' "$W/rename.txt"; then bad "rename: the AI also edited files by hand"; else ok "rename: no hand edits (edit_file, write_file)"; fi
+  grep -E '^> run_command' "$W/rename.txt" | sed 's/^/  (checked its work with: /; s/$/)/'
+  RSESS="$(ls -t "$P/.syok/sessions/"*.json 2>/dev/null | head -1)"
+  [ -n "$RSESS" ] && grep -qF 'Renamed \"calcTotal\" to \"computeOrderTotal\": 6 changes in 3 files' "$RSESS" && ok "rename: the rename itself applied all 6 changes in the 3 files (its reply in the saved chat)" || bad "rename: the saved chat has no rename reply with 6 changes in 3 files"
   cnt() { grep -oE "$1" "$P/src/$2" | wc -l | tr -d ' '; }
   OLD='(^|[^A-Za-z0-9_])calcTotal([^A-Za-z0-9_]|$)'
   [ "$(cnt "$OLD" checkout.ts)" = 0 ] && [ "$(cnt computeOrderTotal checkout.ts)" = 2 ] && ok "rename: src/checkout.ts has the new name twice and the old name nowhere" || bad "rename: src/checkout.ts is wrong: $(cat "$P/src/checkout.ts")"
@@ -248,7 +257,7 @@ echo "models this key lists: ${MODELS:-(none)}"
 VM="${VISION_MODEL:-}"
 if [ -z "$VM" ]; then for pat in '^claude-(sonnet|opus)' '^claude' '^gpt-4o' '^gpt-4\.1' '^gpt-5' '^gemini' '^pixtral' '^grok-.*vision' '^grok-4' 'llama-4' 'qwen.*vl'; do
   VM="$(printf '%s\n' $MODELS | grep -Ei "$pat" | grep -Eiv 'embed|audio|tts|whisper|image-gen|dall' | head -1)"; [ -n "$VM" ] && break; done; fi
-if [ -z "$VM" ]; then echo "SKIP view_image: no model that can see images is listed for this key, so this cannot be checked here"; else
+if [ -z "$VM" ]; then echo "SKIP view_image: no model that can see images is listed for this key (it lists: ${MODELS:-nothing}; presets such as syok-coder may route to models that cannot see pictures), so this cannot be checked here"; else
   echo "view_image model (pinned): $VM"
   P="$W/image"; mkdir -p "$P"
   read -r INUM ICOL < <(python3 -I "$FIX" png "$P/shot.png")
