@@ -130,6 +130,29 @@ Syok cannot know what each of your providers charges, so it shows no money amoun
 { "prices": { "gpt-5": { "in": 1.25, "out": 10 }, "groq": { "in": 0, "out": 0 } } }
 ```
 
+## Use Syok Code directly with your own Anthropic key
+You can point Syok Code at Anthropic's own API instead of your Syok address, for example to compare it fairly with Claude Code on the very same model. Syok's automatic key switching is then off: only your Anthropic key is used.
+
+1. Make a key in the Anthropic Console (console.anthropic.com, **API Keys**). It starts with `sk-ant-`. Treat it like a password.
+2. In your project folder, set the address and key for this terminal only, then run a task:
+   - Mac/Linux:
+     ```
+     export SYOK_BASE_URL=https://api.anthropic.com
+     export SYOK_API_KEY=sk-ant-...        # paste your key here
+     syok -p "fix the failing test" --model claude-sonnet-5
+     ```
+   - Windows (PowerShell): `$env:SYOK_BASE_URL="https://api.anthropic.com"; $env:SYOK_API_KEY="sk-ant-..."; syok -p "fix the failing test" --model claude-sonnet-5`
+3. Always give `--model` with a real Anthropic model name (`syok-coder` is a Syok name and Anthropic does not know it).
+
+Good to know:
+- **Temperature:** Anthropic refuses (HTTP 400) any temperature below 1 on newer Claude models, so when the address is `api.anthropic.com` Syok Code does not send a temperature at all, and Anthropic uses its own default. For any other address it is still sent as before. To leave it out for another address too, set `SYOK_NO_TEMPERATURE=1`.
+- **Answer length:** set `SYOK_MAX_TOKENS` to a positive whole number (for example `SYOK_MAX_TOKENS=8192`) to send it as `max_tokens`. When it is not set, nothing is sent.
+- **Usage:** Anthropic does not send Syok's `X-Syok-*` headers, so the provider is shown as `anthropic` and the model is the one named in Anthropic's answer (for example `anthropic / claude-sonnet-5` in `/usage` and in `--json`).
+- **Cost:** Syok Code talks to Anthropic through its OpenAI-compatible endpoint (`/v1/chat/completions`). Prompt caching is not used through this compatibility layer, so every step pays the full input price and the cost per task is higher than Claude Code, which uses Anthropic's native API with caching.
+- **Web search:** Anthropic has no search service for Syok Code, so `web_search` goes straight to your Exa key (if set) or DuckDuckGo. Web tools stay off when you set `"web": false` or `--no-web`.
+- **`syok doctor`** will note that the key does not start with `syk_`; that is expected here.
+- **Your key:** keep it in the environment variable (or `.syok/config.json`, readable by you alone). Never paste it into a task, a file in your project, a chat or a log; Syok Code never prints it.
+
 ## Heavy jobs on a rented cloud computer
 Some jobs are too heavy for your own computer (training a model, a long build, a big data crunch). `syok run` sends the job to a computer rented from your own [Modal](https://modal.com) account, shows its output live, brings the results back and switches the computer off.
 

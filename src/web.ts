@@ -168,7 +168,8 @@ function providers(d: WebDeps): Provider[] {
   const f = d.f || fetch, list: Provider[] = [];
   const base = (d.base || "").trim().replace(/\/+$/, "").replace(/\/v1$/, "");
   // 1. Your own Syok address: uses the search keys saved in your Syok account. Skipped for the rest of the session if this Syok version does not offer it to developer keys.
-  if (base && d.key && !d.state?.routerOff) list.push({ name: "Syok", run: async (q, _n, signal) => {
+  // Not tried at all when the address is Anthropic's own API (it has no search service), so the key is not sent there for nothing.
+  if (base && d.key && !d.state?.routerOff && !/^https?:\/\/api\.anthropic\.com(:\d+)?$/i.test(base)) list.push({ name: "Syok", run: async (q, _n, signal) => {
     const r = await f(base + "/v1/search/run", { method: "POST", signal, headers: { "content-type": "application/json", authorization: "Bearer " + d.key }, body: JSON.stringify({ query: q }) });
     if ([401, 403, 404, 405].includes(r.status)) { if (d.state) d.state.routerOff = true; try { await r.body?.cancel(); } catch {} return null; }
     if (!r.ok) return "HTTP " + r.status;
