@@ -3,8 +3,13 @@ name: bench pilot (SWE-bench Verified)
 # Each instance runs in its own official SWE-bench container (Docker on this Ubuntu machine), the tool's changes become
 # predictions.jsonl, the quick local grade checks them, and then the OFFICIAL SWE-bench harness (pip package swebench) grades
 # the same predictions. Both results are shown; only the official harness is a real score, and 5 instances are a pilot only.
-# Tools: gold (the dataset's own fix, no AI), noop (no change, no AI), syok (Syok Code through your Syok key: real money on
-# your provider keys). Several tools: comma list, for example "gold,noop".
+# Lanes (comma list allowed, for example "claude,syok-direct"):
+#   gold         the dataset's own fix, no AI        noop   no change, no AI
+#   syok         Syok Code through your Syok router key (secrets SYOK_BASE_URL, SYOK_API_KEY): real money on your provider keys
+#   syok-direct  Syok Code straight to Anthropic on claude-sonnet-5 (secret ANTHROPIC_API_KEY), no web
+#   claude       Claude Code on claude-sonnet-5 (secret ANTHROPIC_API_KEY), no web
+# syok-direct and claude are the same-model lane: the same model, the same limits, a different harness (bench/README.md).
+# Each lane-and-run is its own job (so a long run never hits GitHub's 6-hour job limit); the last job builds one table.
 # Instances: the ids you give, else the first n of a fixed seed (42), so nobody picks instances after seeing results.
 # The pre-registered pilot list is bench/swebench/pilot-ids.txt.
 on:
@@ -17,19 +22,22 @@ on:
         description: "Instance ids, comma separated (optional; overrides n)"
         default: ""
       tool:
-        description: "gold, noop, syok (comma list allowed)"
+        description: "gold, noop, syok, syok-direct, claude (comma list allowed)"
         default: "syok"
+      runs:
+        description: "How many times each paid lane runs (1 to 5); results are labelled run 1, run 2, ..."
+        default: "1"
       model:
-        description: "Model name passed to the tool (Syok: syok-coder by default; see bench/README.md on pinning)"
+        description: "Model for the syok lane only (default syok-coder). syok-direct and claude always use claude-sonnet-5"
         default: ""
       max_spend_usd:
-        description: "Money cap in US dollars for the AI run"
+        description: "Money cap in US dollars for ALL paid runs together"
         default: "5"
       cost_per_instance_usd:
-        description: "Worst-case planning figure per instance (the run is refused when n x this is above the cap)"
+        description: "Worst-case planning figure per instance (refused when instances x this x runs x paid lanes is above the cap)"
         default: "1"
       max_steps:
-        description: "Steps the tool may take per instance"
+        description: "Steps (Syok Code) / turns (Claude Code) the tool may take per instance"
         default: "40"
       timeout_sec:
         description: "Time limit per instance (tool run and test run, each)"
@@ -42,27 +50,29 @@ permissions:
 concurrency:
   group: bench-pilot
   cancel-in-progress: false
+env:
+  SWEBENCH_VERSION: "5.0.2"
+  # The same-model lane's model (syok-direct and claude). Price: bench/prices.json.
+  FAIR_MODEL: "claude-sonnet-5"
+  # Claude Code version installed in each container: stable, latest or a number like 2.1.330 (recorded per instance).
+  CLAUDE_BENCH_VERSION: "stable"
 jobs:
-  pilot:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
-    env:
-      SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
-      SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
-      SWEBENCH_VERSION: "5.0.2"
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.check.outputs.matrix }}
+      spend_cap: ${{ steps.check.outputs.spend_cap }}
     steps:
       - uses: actions/checkout@v4
-      - name: Hide the Syok address in the logs
-        # GitHub hides the exact secret only; the address is also printed as a bare host. Same rule as the other live workflows.
-        env:
-          U: ${{ secrets.SYOK_BASE_URL }}
-        shell: bash
-        run: |
-          h="${U#*://}"; h="${h%%/*}"
-          for v in "$h" "${U%/}" "${U%/v1}" "${U%/v1/}"; do [ -n "$v" ] && echo "::add-mask::$v"; done
-          a="${h#syok-ai-router-personal-}"; a="${a%%.*}"; [ -n "$a" ] && [ "$a" != "$h" ] && echo "::add-mask::$a"
-          exit 0
-      - name: Check the inputs
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - name: Check the inputs, the secrets each paid lane needs, and the money plan
+        # bench/swebench/lane.ts: refuses a paid lane whose secret is missing (it only checks "set or not"), and refuses a
+        # plan whose worst case (instances x cost_per_instance x runs x paid lanes) is above max_spend_usd.
+        id: check
         env:
           IN_TOOL: ${{ inputs.tool }}
           IN_N: ${{ inputs.n }}
@@ -72,16 +82,35 @@ jobs:
           IN_PER: ${{ inputs.cost_per_instance_usd }}
           IN_STEPS: ${{ inputs.max_steps }}
           IN_TIMEOUT: ${{ inputs.timeout_sec }}
+          IN_RUNS: ${{ inputs.runs }}
+          SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: bun bench/swebench/lane.ts check
+
+  pilot:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.lane }} run ${{ matrix.run }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hide the Syok address and the Anthropic key in the logs
+        # GitHub hides each exact secret already; the address is also printed as a bare host. Same rule as the other live workflows.
+        env:
+          U: ${{ secrets.SYOK_BASE_URL }}
+          K: ${{ secrets.ANTHROPIC_API_KEY }}
         shell: bash
         run: |
-          set -eu
-          echo "$IN_TOOL" | grep -Eq '^(gold|noop|syok)(,(gold|noop|syok))*$' || { echo "tool must be gold, noop or syok (comma list allowed)"; exit 1; }
-          echo "$IN_IDS" | grep -Eq '^[A-Za-z0-9_.,-]*$' || { echo "ids: letters, digits, _ . - and commas only"; exit 1; }
-          echo "$IN_MODEL" | grep -Eq '^[A-Za-z0-9_./:-]*$' || { echo "model: letters, digits, _ . / : - only"; exit 1; }
-          for v in "$IN_N" "$IN_STEPS" "$IN_TIMEOUT"; do echo "$v" | grep -Eq '^[0-9]+$' || { echo "n, max_steps and timeout_sec must be whole numbers"; exit 1; }; done
-          for v in "$IN_CAP" "$IN_PER"; do echo "$v" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || { echo "money inputs must be numbers"; exit 1; }; done
-          if echo "$IN_TOOL" | grep -q syok && { [ -z "$SYOK_BASE_URL" ] || [ -z "$SYOK_API_KEY" ]; }; then echo "the Syok secrets are not set"; exit 1; fi
-          echo "Inputs OK."
+          h="${U#*://}"; h="${h%%/*}"
+          for v in "$h" "${U%/}" "${U%/v1}" "${U%/v1/}"; do [ -n "$v" ] && echo "::add-mask::$v"; done
+          a="${h#syok-ai-router-personal-}"; a="${a%%.*}"; [ -n "$a" ] && [ "$a" != "$h" ] && echo "::add-mask::$a"
+          [ -n "$K" ] && echo "::add-mask::$K"
+          exit 0
       - name: Free disk space for the SWE-bench images (each is 1-1.5 GB compressed)
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
@@ -103,38 +132,50 @@ jobs:
           python -c "import datasets; datasets.load_dataset('SWE-bench/SWE-bench_Verified', split='test').to_json('$RUNNER_TEMP/ds/verified.jsonl')"
           wc -l "$RUNNER_TEMP/ds/verified.jsonl"; sha256sum "$RUNNER_TEMP/ds/verified.jsonl"
       - name: Build Syok Code from this commit (the containers get this build, not the published one)
-        if: contains(inputs.tool, 'syok')
+        if: startsWith(matrix.lane, 'syok')
         run: |
           bun build src/main.ts --target=bun --minify --outfile "$RUNNER_TEMP/syok.js"
           echo "SYOK_BENCH_BUNDLE=$RUNNER_TEMP/syok.js" >> "$GITHUB_ENV"
           echo "Syok Code build from commit $GITHUB_SHA"
       - name: Run the pilot
         env:
-          IN_TOOL: ${{ inputs.tool }}
+          LANE: ${{ matrix.lane }}
+          RUN_NO: ${{ matrix.run }}
+          SPEND_CAP: ${{ needs.plan.outputs.spend_cap }}
           IN_N: ${{ inputs.n }}
           IN_IDS: ${{ inputs.ids }}
           IN_MODEL: ${{ inputs.model }}
-          IN_CAP: ${{ inputs.max_spend_usd }}
           IN_PER: ${{ inputs.cost_per_instance_usd }}
           IN_STEPS: ${{ inputs.max_steps }}
           IN_TIMEOUT: ${{ inputs.timeout_sec }}
+          SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         shell: bash
         run: |
           set -u
           OUT="$RUNNER_TEMP/pilot"; mkdir -p "$OUT"
           if [ -n "$IN_IDS" ]; then SEL="--ids $IN_IDS"; else SEL="--n $IN_N --seed 42"; fi
-          status=0
-          for t in $(echo "$IN_TOOL" | tr ',' ' '); do
-            echo "::group::$t"
-            extra=""
-            if [ "$t" = syok ]; then extra="--model ${IN_MODEL:-syok-coder} --max-steps $IN_STEPS --cost-per-instance $IN_PER"; fi
-            # shellcheck disable=SC2086
-            bun bench/swebench/run.ts --dataset "$RUNNER_TEMP/ds/verified.jsonl" $SEL --tool "$t" $extra --grade \
-              --max-spend "$IN_CAP" --timeout "$IN_TIMEOUT" --out "$OUT" || status=$?
-            echo "::endgroup::"
-          done
           echo "SELECTION=$SEL" >> "$GITHUB_ENV"
-          exit $status
+          # Equal limits for every paid lane: the same steps/turns cap, time limit and money share.
+          PAID="--max-steps $IN_STEPS --cost-per-instance $IN_PER --max-spend $SPEND_CAP"
+          case "$LANE" in
+            gold|noop) extra="--max-spend $SPEND_CAP"; unset SYOK_API_KEY SYOK_BASE_URL ANTHROPIC_API_KEY ;;
+            syok) extra="--model ${IN_MODEL:-syok-coder} $PAID"; unset ANTHROPIC_API_KEY ;;
+            syok-direct)
+              # Syok Code straight to Anthropic for THIS step only (the syok lane keeps the router secrets).
+              [ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "The ANTHROPIC_API_KEY secret is not set."; exit 1; }
+              export SYOK_BASE_URL="https://api.anthropic.com" SYOK_API_KEY="$ANTHROPIC_API_KEY"; unset ANTHROPIC_API_KEY
+              extra="--model $FAIR_MODEL $PAID --no-web --same-model" ;;
+            claude)
+              [ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "The ANTHROPIC_API_KEY secret is not set."; exit 1; }
+              unset SYOK_API_KEY SYOK_BASE_URL
+              extra="--model $FAIR_MODEL $PAID --no-web --same-model" ;;
+            *) echo "unknown lane"; exit 1 ;;
+          esac
+          # shellcheck disable=SC2086
+          bun bench/swebench/run.ts --dataset "$RUNNER_TEMP/ds/verified.jsonl" $SEL --tool "$LANE" --label "$LANE" --run "$RUN_NO" $extra --grade \
+            --timeout "$IN_TIMEOUT" --out "$OUT"
       - name: Grade with the official SWE-bench harness
         if: always() && inputs.official == 'true'
         env:
@@ -153,41 +194,80 @@ jobs:
             tail -n 20 "$d/official.txt"
             echo "::endgroup::"
           done
-      - name: Remove the Syok address and key from the files before upload
-        # Runs BEFORE the summary is written, so the summary and the artifact are both built from scrubbed files.
-        # bench/swebench/scrub.ts replaces every value byte for byte, checks that none is left, and deletes the files
-        # (and fails this step) if one is. The values are passed by variable name and never printed.
+      - name: Remove the Syok address, the Syok key and the Anthropic key from the files before upload
+        # Runs BEFORE anything is summarised or uploaded. bench/swebench/scrub.ts replaces every value byte for byte, checks
+        # that none is left, and deletes the files (and fails this step) if one is. Values are passed by variable NAME only.
         if: always()
         env:
           U: ${{ secrets.SYOK_BASE_URL }}
+          SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+          SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         shell: bash
         run: |
           h="${U#*://}"; h="${h%%/*}"
           a="${h#syok-ai-router-personal-}"; a="${a%%.*}"; [ "$a" = "$h" ] && a=""
-          SYOK_HOST="$h" SYOK_ACCT="$a" bun bench/swebench/scrub.ts "$RUNNER_TEMP/pilot" SYOK_API_KEY SYOK_BASE_URL SYOK_HOST SYOK_ACCT
-      - name: Write the summary table
+          SYOK_HOST="$h" SYOK_ACCT="$a" bun bench/swebench/scrub.ts "$RUNNER_TEMP/pilot" SYOK_API_KEY SYOK_BASE_URL SYOK_HOST SYOK_ACCT ANTHROPIC_API_KEY
+      - name: Write this job's table
         if: always()
+        env:
+          LANE: ${{ matrix.lane }}
+          RUN_NO: ${{ matrix.run }}
         shell: bash
         run: |
+          mkdir -p "$RUNNER_TEMP/pilot"
           {
-            echo "## SWE-bench Verified pilot"
+            echo "## SWE-bench Verified pilot: $LANE run $RUN_NO"
             echo "Commit: \`$GITHUB_SHA\`. Instances: \`${SELECTION:-?}\`. Harness: swebench $SWEBENCH_VERSION."
             echo
             bun bench/swebench/summary.ts "$RUNNER_TEMP/pilot"
-          } > "$RUNNER_TEMP/results-summary.md"
-          cat "$RUNNER_TEMP/results-summary.md" >> "$GITHUB_STEP_SUMMARY"
-          if [ -d "$RUNNER_TEMP/pilot" ]; then cp "$RUNNER_TEMP/results-summary.md" "$RUNNER_TEMP/pilot/results-summary.md"; fi
+          } > "$RUNNER_TEMP/pilot/job-$LANE-run$RUN_NO.md"
+          cat "$RUNNER_TEMP/pilot/job-$LANE-run$RUN_NO.md" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: bench-pilot-${{ github.run_id }}
+          # The job-*.md file sits in the pilot folder itself, so every run's own folder name is kept in the artifact.
+          name: bench-pilot-${{ github.run_id }}-${{ matrix.lane }}-run${{ matrix.run }}
           path: |
+            ${{ runner.temp }}/pilot/job-*.md
             ${{ runner.temp }}/pilot/**/predictions.jsonl
             ${{ runner.temp }}/pilot/**/results.json
             ${{ runner.temp }}/pilot/**/results.md
             ${{ runner.temp }}/pilot/**/official.txt
             ${{ runner.temp }}/pilot/**/*.pilot-*.json
             ${{ runner.temp }}/pilot/**/logs/**
-            ${{ runner.temp }}/pilot/results-summary.md
           if-no-files-found: warn
+          retention-days: 30
+
+  summary:
+    needs: [plan, pilot]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-pilot-${{ github.run_id }}-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/pilot
+      - name: Write the summary table (every lane and run)
+        # Built only from the jobs' artifacts, which were scrubbed before upload.
+        shell: bash
+        run: |
+          {
+            echo "## SWE-bench Verified pilot"
+            echo "Commit: \`$GITHUB_SHA\`. Harness: swebench $SWEBENCH_VERSION. Same-model lane model: $FAIR_MODEL."
+            echo
+            bun bench/swebench/summary.ts "$RUNNER_TEMP/pilot"
+          } > "$RUNNER_TEMP/results-summary.md"
+          cat "$RUNNER_TEMP/results-summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-pilot-${{ github.run_id }}-summary
+          path: ${{ runner.temp }}/results-summary.md
           retention-days: 30

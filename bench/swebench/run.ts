@@ -3,10 +3,13 @@
 // OFFICIAL SWE-bench harness grades. Beginner guide: bench/README.md (section "SWE-bench").
 //   bun bench/swebench/run.ts --dataset verified.jsonl --n 5 --seed 42 --tool syok --model <model> [--backend docker|modal] [--grade] [--yes]
 //   bun bench/swebench/run.ts --dataset verified.jsonl --ids astropy__astropy-12907 --tool gold --grade     check the pipeline (no AI, no cost)
-// Tools: syok, claude, codex, cursor; and two pseudo-tools that spend nothing: gold (applies the dataset's reference fix) and noop.
+// Tools: syok, claude, codex, cursor; syok-direct (Syok Code with SYOK_BASE_URL=https://api.anthropic.com, see lane.ts); and two
+// pseudo-tools that spend nothing: gold (applies the dataset's reference fix) and noop.
 // Options: --timeout <sec per instance, default 1800>  --out <folder, default bench/swebench/out>  --platform linux/amd64
 //          --max-spend <usd, default 5>  --cost-per-instance <usd, default 2>  --skip-install (the tool is already in the image)
 //          --max-steps <n> (passed to tools that can stop themselves after n steps: Syok Code, Claude Code)
+//          --no-web (the tool gets no web search or web fetch)  --same-model (mark every instance where a model other than
+//          --model answered)  --label <name> (names the output folder and predictions; default the tool)  --run <n> (repeat number)
 // Spending: before starting, the plan's worst case (--cost-per-instance x instances) must be within --max-spend (or --yes).
 // While running, the money used so far (the tool's own number, else bench/prices.json) is added up, and no new instance is
 // started once it reaches --max-spend. When a tool reports no money amount and no price matches, the live total is "unknown":
@@ -22,6 +25,7 @@ import { readDataset, select, predictionLine, promptFor, type Instance } from ".
 import { dockerBackend, modalBackend, type Backend, type Sandbox } from "./backends.ts";
 import { grade, type Grade } from "./grade.ts";
 import { loadPrices, type Prices } from "../lib/bench.ts";
+import { adapterOf, ANTHROPIC_BASE, runAsCommand, giveFolderCommand, takeBackFolderCommand, sameModel } from "./lane.ts";
 
 export interface InstanceReport {
   instance_id: string; image: string; tool: string; model: string;
@@ -30,8 +34,17 @@ export interface InstanceReport {
   imageChangedFiles?: number | null;
   toolExit: number | null; toolTimedOut: boolean; toolSeconds: number;
   tokens: { input: number | null; output: number | null; total: number | null }; costUsd: number | null;
-  /** Where costUsd came from: the tool itself, bench/prices.json, or nobody (unknown; never guessed). */
-  costSource?: "tool" | "prices" | "unknown" | "none";
+  /** Of tokens.input, how many were read from the prompt cache (only when the tool says so: Claude Code). */
+  cacheReadTokens?: number | null;
+  /** Where costUsd came from: the tool itself, bench/prices.json, bench/prices.json for the pinned model because the tool
+   *  named no model (prices-assumed, labelled so), or nobody (unknown; never guessed). */
+  costSource?: "tool" | "prices" | "prices-assumed" | "unknown" | "none";
+  /** The tool's version inside the container (its adapter's containerVersion line). */
+  toolVersion?: string;
+  /** --same-model: true = only the pinned model answered, false = another model answered (otherModels), null = the tool
+   *  named no model, so it is not confirmed. */
+  sameModel?: boolean | null;
+  otherModels?: string[];
   /** Which "<provider> / <model>" answered, with its share of steps and tokens (only what the tool itself reported). */
   modelsSeen?: string[];
   byModel?: Record<string, { steps: number; input: number; output: number }>;
@@ -44,13 +57,21 @@ export interface InstanceReport {
   outcome?: string;
   error?: string;
 }
-export interface InstanceOpts { backend: Backend; tool: string; adapter?: Adapter; model: string; timeoutSec: number; maxSteps?: number; doGrade: boolean; platform?: string; skipInstall?: boolean; logDir: string; prices?: Prices }
+export interface InstanceOpts { backend: Backend; tool: string; adapter?: Adapter; model: string; timeoutSec: number; maxSteps?: number; doGrade: boolean; platform?: string; skipInstall?: boolean; logDir: string; prices?: Prices;
+  /** No web search or web fetch for the tool. */ noWeb?: boolean;
+  /** Check that only --model answered (the same-model lanes). */ sameModelCheck?: boolean }
 
-/** Cost of one run: the tool's own number; else every answering model priced from bench/prices.json; else unknown. */
-export function instanceCost(u: { costUsd: number | null; byModel?: Record<string, { input: number; output: number }> }, prices: Prices): { usd: number | null; source: "tool" | "prices" | "unknown" } {
+/** Cost of one run: the tool's own number; else every answering model priced from bench/prices.json; else, only when the
+ *  tool named NO model and a pinned model is given (the same-model lanes), its tokens priced as that model and labelled
+ *  "prices-assumed"; else unknown. */
+export function instanceCost(u: { costUsd: number | null; byModel?: Record<string, { input: number; output: number }>; inputTokens?: number | null; outputTokens?: number | null }, prices: Prices, assumeModel?: string): { usd: number | null; source: "tool" | "prices" | "prices-assumed" | "unknown" } {
   if (u.costUsd !== null) return { usd: u.costUsd, source: "tool" };
   const by = Object.entries(u.byModel || {});
   const keys = Object.keys(prices).sort((a, b) => b.length - a.length);
+  if (!by.length && assumeModel && prices[assumeModel] && typeof u.inputTokens === "number" && typeof u.outputTokens === "number") {
+    const p = prices[assumeModel];
+    return { usd: (u.inputTokens * (p.in ?? 0) + u.outputTokens * (p.out ?? 0)) / 1e6, source: "prices-assumed" };
+  }
   if (!by.length || !keys.length) return { usd: null, source: "unknown" };
   let usd = 0;
   for (const [name, b] of by) {
@@ -72,12 +93,14 @@ export function outcomeOf(r: InstanceReport): string {
 }
 const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 /** The Markdown table for results.md and the GitHub job summary. */
-export function resultsTable(meta: { tool: string; model: string; backend: string; gradedBy: string; maxSpendUsd?: number; spentUsd: number | null; stoppedEarly?: string }, reports: InstanceReport[]): string {
+export function resultsTable(meta: { tool: string; model: string; backend: string; gradedBy: string; maxSpendUsd?: number; spentUsd: number | null; stoppedEarly?: string; label?: string }, reports: InstanceReport[]): string {
   const resolved = reports.filter((r) => r.outcome === "resolved").length;
   const fmtTok = (n: number | null) => (n === null ? "unknown" : String(n));
-  const money = (r: InstanceReport) => (r.costUsd === null ? (r.costSource === "none" ? "$0" : "unknown") : "$" + r.costUsd.toFixed(4) + (r.costSource === "prices" ? " (est.)" : ""));
+  const money = (r: InstanceReport) => (r.costUsd === null ? (r.costSource === "none" ? "$0" : "unknown") : "$" + r.costUsd.toFixed(4) + (r.costSource === "prices" ? " (est.)" : r.costSource === "prices-assumed" ? " (est., model not reported)" : ""));
+  const tok = (r: InstanceReport) => `${fmtTok(r.tokens.input)} / ${fmtTok(r.tokens.output)}` + (typeof r.cacheReadTokens === "number" ? ` (cache reads ${r.cacheReadTokens} of the input)` : "");
+  const same = (r: InstanceReport) => (r.sameModel === false ? ` **OTHER MODEL ANSWERED: ${(r.otherModels || []).join(", ")}**` : r.sameModel === null ? " (model not confirmed: the tool named none)" : "");
   const L = [
-    `### SWE-bench Verified pilot: ${meta.tool}${meta.tool === meta.model ? "" : " (model asked: " + meta.model + ")"}`,
+    `### SWE-bench Verified pilot: ${meta.tool}${meta.tool === meta.model ? "" : " (model asked: " + meta.model + ")"}${meta.label && meta.label !== meta.tool ? " [" + meta.label + "]" : ""}`,
     "",
     `**${resolved}/${reports.length} resolved: quick-grade, not official.** Graded by: ${meta.gradedBy}. Backend: ${meta.backend}.`,
     "",
@@ -89,7 +112,7 @@ export function resultsTable(meta: { tool: string; model: string; backend: strin
     const f2p = "resolved" in g ? `${g.failToPass.passed}/${g.failToPass.total}` : "-", p2p = "resolved" in g ? `${g.passToPass.passed}/${g.passToPass.total}` : "-";
     const models = r.byModel && Object.keys(r.byModel).length ? Object.entries(r.byModel).map(([k, v]) => `${k} (${v.steps} steps)`).join("; ") : (r.modelsSeen || []).join("; ") || (r.tool === "gold" || r.tool === "noop" ? "none (no AI)" : "not reported");
     const note = r.error ? r.error.slice(0, 200) : "skipped" in g ? g.skipped : g.applied ? g.note : g.note.slice(0, 200);
-    L.push(`| ${r.instance_id} | ${r.outcome} | ${r.patchBytes} | ${f2p} | ${p2p} | ${r.toolSeconds}${r.toolTimedOut ? " (time limit)" : ""} | ${fmtTok(r.tokens.input)} / ${fmtTok(r.tokens.output)} | ${money(r)} | ${cell(models)} | ${cell(note)}${r.switches?.length ? " Provider switches: " + r.switches.length + "." : ""} |`);
+    L.push(`| ${r.instance_id} | ${r.outcome} | ${r.patchBytes} | ${f2p} | ${p2p} | ${r.toolSeconds}${r.toolTimedOut ? " (time limit)" : ""} | ${tok(r)} | ${money(r)} | ${cell(models + same(r))} | ${cell(note)}${r.switches?.length ? " Provider switches: " + r.switches.length + "." : ""} |`);
   }
   L.push("", `Money used: ${meta.spentUsd === null ? "unknown (the tool reports no money amount and bench/prices.json has no matching price)" : "$" + meta.spentUsd.toFixed(4)}` +
     (meta.maxSpendUsd !== undefined ? `; cap $${meta.maxSpendUsd}` : "") + (meta.stoppedEarly ? `. STOPPED EARLY: ${meta.stoppedEarly}` : "") + ".",
@@ -155,17 +178,30 @@ export async function solveInstance(x: Instance, o: InstanceOpts): Promise<{ pat
           if (r.code !== 0) throw new Error(`installing ${ad.label} in the container failed (${line}): ${r.out.trim().slice(-400)}`);
         }
       }
-      const c = ad.command({ prompt: promptFor(x, TESTBED), cwd: TESTBED, model: o.model, limits: { timeSec: o.timeoutSec, ...(o.maxSteps ? { maxSteps: o.maxSteps } : {}) }, inContainer: true });
+      const c = ad.command({ prompt: promptFor(x, TESTBED), cwd: TESTBED, model: o.model, limits: { timeSec: o.timeoutSec, ...(o.maxSteps ? { maxSteps: o.maxSteps } : {}) }, inContainer: true, ...(o.noWeb ? { noWeb: true } : {}) });
       const envLine = Object.entries(c.env || {}).map(([k, v]) => `export ${k}=${q(v)}; `).join("");
+      // A tool that must not run as root (Claude Code) runs as its own user, who owns /testbed only while the tool runs.
+      const asUser = (line: string) => (ad.runAs ? runAsCommand(line, ad.runAs.user, ad.runAs.home) : line);
+      if (ad.containerVersion) { const v = await box.exec(asUser(ad.containerVersion), { cwd: TESTBED, timeoutSec: 120 }); rep.toolVersion = v.code === 0 ? v.out.trim().split(/\r?\n/).pop()!.slice(0, 100) : "unknown"; }
+      if (ad.runAs) {
+        const g = await box.exec(giveFolderCommand(TESTBED, ad.runAs.user), { timeoutSec: 600 });
+        if (g.code !== 0) throw new Error(`could not give ${TESTBED} to the user ${ad.runAs.user}: ` + g.out.trim().slice(-300));
+      }
       const t0 = Date.now();
-      const r = await box.exec(envLine + c.cmd.map(q).join(" "), { cwd: TESTBED, timeoutSec: o.timeoutSec, env: ad.authEnv });
+      const r = await box.exec(asUser(envLine + c.cmd.map(q).join(" ")), { cwd: TESTBED, timeoutSec: o.timeoutSec, env: ad.authEnv });
       rep.toolSeconds = Math.round((Date.now() - t0) / 1000); rep.toolExit = r.code; rep.toolTimedOut = r.timedOut;
+      if (ad.runAs) {
+        const b = await box.exec(takeBackFolderCommand(TESTBED), { timeoutSec: 600 });
+        if (b.code !== 0) throw new Error(`could not give ${TESTBED} back to its owner after the run: ` + b.out.trim().slice(-300));
+      }
       writeFileSync(join(o.logDir, x.instance_id + ".tool.txt"), r.out);
       const u = ad.parse(r.out, "");
       rep.tokens = { input: u.inputTokens, output: u.outputTokens, total: u.totalTokens };
       rep.modelsSeen = u.modelsSeen; if (u.byModel) rep.byModel = u.byModel; rep.steps = u.steps;
+      if (u.cacheReadTokens !== undefined) rep.cacheReadTokens = u.cacheReadTokens;
+      if (o.sameModelCheck) { const sm = sameModel(u.modelsSeen, o.model); rep.sameModel = sm.ok; rep.otherModels = sm.others; }
       rep.switches = r.out.split(/\r?\n/).filter((l) => /switched provider/i.test(l)).map((l) => l.trim().slice(0, 300)).slice(0, 50);
-      const cost = instanceCost({ costUsd: u.costUsd, byModel: u.byModel }, o.prices || {});
+      const cost = instanceCost({ costUsd: u.costUsd, byModel: u.byModel, inputTokens: u.inputTokens, outputTokens: u.outputTokens }, o.prices || {}, o.sameModelCheck ? o.model : undefined);
       rep.costUsd = cost.usd; rep.costSource = cost.source;
     }
     const d = await box.exec(diffCommand(o.adapter?.patchExclude || []), { cwd: TESTBED, timeoutSec: 600 });
@@ -203,8 +239,15 @@ async function main(): Promise<number> {
   if (!picked.length) { console.error("No instances selected."); return 2; }
   const tool = arg("--tool");
   const pseudo = tool === "gold" || tool === "noop";
-  if (!tool) { console.error("Say which tool: --tool syok|claude|codex|cursor (or gold / noop to check the pipeline)."); return 2; }
-  const adapter = pseudo ? undefined : getAdapter(tool);
+  if (!tool) { console.error("Say which tool: --tool syok|syok-direct|claude|codex|cursor (or gold / noop to check the pipeline)."); return 2; }
+  const adapter = pseudo ? undefined : getAdapter(adapterOf(tool));
+  if (tool === "syok-direct" && (process.env.SYOK_BASE_URL || "").replace(/\/+$/, "") !== ANTHROPIC_BASE) {
+    console.error(`syok-direct runs Syok Code straight against Anthropic: set SYOK_BASE_URL=${ANTHROPIC_BASE} and SYOK_API_KEY to an Anthropic API key for this run.`); return 2;
+  }
+  const runNo = arg("--run") ? +arg("--run") : null;
+  if (runNo !== null && !(Number.isInteger(runNo) && runNo >= 1)) { console.error("--run must be a whole number from 1."); return 2; }
+  const label = arg("--label", tool);
+  if (!/^[A-Za-z0-9_.-]+$/.test(label)) { console.error("--label: letters, digits, _ . - only."); return 2; }
   const model = pseudo ? tool : arg("--model");
   if (!model) { console.error("Pin the model: --model <name> (the same model for every tool you compare)."); return 2; }
   if (adapter) {
@@ -220,14 +263,15 @@ async function main(): Promise<number> {
   if (problem) { console.error(problem); return 5; }
   const timeoutSec = +arg("--timeout", "1800");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const out = resolve(arg("--out", join(import.meta.dir, "out")), `${stamp}-${tool}`);
+  const out = resolve(arg("--out", join(import.meta.dir, "out")), `${stamp}-${label}${runNo !== null ? "-run" + runNo : ""}`);
   const logDir = join(out, "logs"); mkdirSync(logDir, { recursive: true });
   const predFile = join(out, "predictions.jsonl");
   const reports: InstanceReport[] = [];
   const maxSteps = arg("--max-steps") ? +arg("--max-steps") : undefined;
   const cap = +arg("--max-spend", "5");
-  const o: InstanceOpts = { backend, tool, adapter, model, timeoutSec, maxSteps, doGrade: has("--grade"), platform: arg("--platform") || undefined, skipInstall: has("--skip-install"), logDir, prices: loadPrices(join(import.meta.dir, "..", "prices.json")) };
-  const modelName = pseudo ? tool : `${tool}__${model}`;
+  const o: InstanceOpts = { backend, tool, adapter, model, timeoutSec, maxSteps, doGrade: has("--grade"), platform: arg("--platform") || undefined, skipInstall: has("--skip-install"), logDir, prices: loadPrices(join(import.meta.dir, "..", "prices.json")),
+    noWeb: has("--no-web"), sameModelCheck: has("--same-model") && !pseudo };
+  const modelName = pseudo ? tool : `${label}__${model}`;
   let spent: number | null = 0, stoppedEarly = "";
   const notRun: string[] = [];
   for (const x of picked) {
@@ -242,15 +286,16 @@ async function main(): Promise<number> {
     else if (spent !== null) spent += report.costUsd;
     const g: any = report.quickGrade;
     console.log(`  patch ${report.patchBytes} bytes, tool ${report.toolSeconds}s${report.toolTimedOut ? " (TIMED OUT)" : ""}${report.error ? ", ERROR " + report.error.slice(0, 300) : ""}${"resolved" in g ? `, quick grade: ${g.resolved ? "RESOLVED" : "not resolved"} (FAIL_TO_PASS ${g.failToPass.passed}/${g.failToPass.total}, PASS_TO_PASS ${g.passToPass.passed}/${g.passToPass.total})` : g.skipped ? ", quick grade skipped: " + g.skipped : ""}` +
-      (report.modelsSeen?.length ? `; answered by: ${report.modelsSeen.join(", ")}` : ""));
+      (report.modelsSeen?.length ? `; answered by: ${report.modelsSeen.join(", ")}` : "") + (report.sameModel === false ? ` (OTHER MODEL ANSWERED: ${report.otherModels!.join(", ")})` : ""));
   }
   if (notRun.length) { stoppedEarly += notRun.join(", "); console.log("STOPPED EARLY: " + stoppedEarly); }
   const gradedBy = o.doGrade ? "quick local grade only (NOT the official harness)" : "not graded";
-  const result = { tool, model, backend: backend.name, gradedBy, maxSteps: maxSteps ?? null, timeoutSec, maxSpendUsd: cap, spentUsd: spent, stoppedEarly: stoppedEarly || null, notRun,
+  const result = { tool, lane: label, run: runNo, model, backend: backend.name, gradedBy, maxSteps: maxSteps ?? null, timeoutSec, noWeb: o.noWeb === true, sameModelCheck: o.sameModelCheck === true,
+    maxSpendUsd: cap, spentUsd: spent, stoppedEarly: stoppedEarly || null, notRun,
     resolved: reports.filter((r) => r.outcome === "resolved").length, total: reports.length, reports };
   writeFileSync(join(out, "results.json"), JSON.stringify(result, null, 2));
   writeFileSync(join(out, "report.json"), JSON.stringify(result, null, 2));
-  writeFileSync(join(out, "results.md"), resultsTable({ tool, model, backend: backend.name, gradedBy, maxSpendUsd: pseudo ? undefined : cap, spentUsd: spent, stoppedEarly }, reports));
+  writeFileSync(join(out, "results.md"), resultsTable({ tool, model, backend: backend.name, gradedBy, maxSpendUsd: pseudo ? undefined : cap, spentUsd: spent, stoppedEarly, label: label + (runNo !== null ? " run " + runNo : "") }, reports));
   console.log(`\nWrote ${predFile}\n      ${join(out, "results.json")}\n      ${join(out, "results.md")}\n` +
     `This is NOT an official score. Grade the predictions with the official harness (see bench/README.md):\n` +
     `  swebench eval verified -p ${predFile} --run-id ${stamp} -j 4\n  (older harness: python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Verified --predictions_path ${predFile} --max_workers 4 --run_id ${stamp})`);
