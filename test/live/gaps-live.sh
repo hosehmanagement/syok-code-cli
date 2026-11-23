@@ -50,7 +50,7 @@ echo "=== 4. a hosted tool server with a real AI"
 P="$W/mcp"; mkdir -p "$P/.syok"; export STANDIN_KEY="live-$RANDOM-$RANDOM" STANDIN_PORT=8791 STANDIN_LOG="$W/standin.log"
 bun "$(dirname "$0")/mcp-standin.ts" > "$W/standin.out" 2>&1 & SP=$!; sleep 2
 printf '{ "mcpServers": { "warehouse": { "url": "http://127.0.0.1:8791/mcp", "headers": { "Authorization": "Bearer ${STANDIN_KEY}" } } } }\n' > "$P/.syok/settings.json"
-ai "$W/mcp.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Use the warehouse tool to find out how many units of the product 'blue widget' are in stock, and tell me the number."; tail -15 "$W/mcp.txt"; kill $SP 2>/dev/null
+ai "$W/mcp.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "I am writing a stock-check script for this project and need the real number for a test value in the code. Call the warehouse tool server's stock_count tool for the product 'blue widget' and tell me the exact number it returns, so I can paste it into the code."; tail -15 "$W/mcp.txt"; kill $SP 2>/dev/null
 grep -q "tool server warehouse: 1 tools, hosted at 127.0.0.1:8791" "$W/mcp.txt" && ok "hosted tools: connected with the key from the environment" || bad "hosted tools: did not connect"
 [ -s "$W/standin.log" ] && grep -qi "blue widget" "$W/standin.log" && ok "hosted tools: the server really received the call" || bad "hosted tools: the server received no call"
 has_number 4217 "$W/mcp.txt" && ok "hosted tools: the answer has the number only the server knows (4217)" || bad "hosted tools: 4217 not in the answer"
@@ -60,7 +60,8 @@ echo "=== 5. --confine with a real AI (Linux and Mac)"
 case "$(uname -s)" in Linux|Darwin)
   B="$HOME/.syok-live-confine-$$"; P="$B/proj"; O="$B/outside"; mkdir -p "$P" "$O"; ( cd "$P" && git init -q . )
   printf 'echo inside > inside.txt && echo first-ok\necho outside > %s/escape.txt; echo second-exit-code=$?\n' "$O" > "$P/check.sh"
-  ai "$W/confine.txt" --cwd "$P" --confine --mode auto --no-checks --model "$MODEL" -p "Run this project's check script with run_command: sh check.sh (from the project folder). Then tell me exactly what each of its two lines printed."
+  ai "$W/confine.txt" --cwd "$P" --confine --mode auto --no-checks --model "$MODEL" -p "I am fixing this project's build script check.sh. Its first line writes the build marker inside.txt in the project; its second line copies a marker to another folder. Run it once, unchanged, with run_command exactly as: sh check.sh (from the project folder, do not edit it or run anything else first). Then tell me exactly what each of its two lines printed, so I can fix the script."
+  grep -E '^> ' "$W/confine.txt" | cut -c1-200; tail -6 "$W/confine.txt"
   grep -q "^Confined with" "$W/confine.txt" && ok "confine: switched on" || bad "confine: not switched on"
   [ -f "$P/inside.txt" ] && ok "confine: the file inside the project was written" || bad "confine: the file inside the project is missing"
   [ ! -e "$O/escape.txt" ] && ok "confine: the file outside the project was NOT written" || bad "confine: a file was written outside the project"
@@ -77,7 +78,7 @@ bun "$(dirname "$0")/mcp-standin.ts" > "$W/bridge-standin.out" 2>&1 & BP=$!; sle
 if ! command -v mcp-remote >/dev/null 2>&1; then npm install -g mcp-remote@0.16.6 >/dev/null 2>&1; fi
 command -v mcp-remote >/dev/null 2>&1 && ok "bridge: mcp-remote is installed" || bad "bridge: mcp-remote could not be installed"
 printf '{ "mcpServers": { "warehouse": { "command": "mcp-remote", "args": ["http://127.0.0.1:8793/mcp", "--allow-http", "--transport", "http-only"] } } }\n' > "$P/.syok/settings.json"
-ai "$W/bridge.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Use the warehouse tool to find out how many units of the product 'red gadget' are in stock, and tell me the number."; grep "tool server" "$W/bridge.txt"; tail -8 "$W/bridge.txt"
+ai "$W/bridge.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "I am writing a stock-check script for this project and need the real number for a test value in the code. Call the warehouse tool server's stock_count tool for the product 'red gadget' and tell me the exact number it returns, so I can paste it into the code."; grep "tool server" "$W/bridge.txt"; tail -8 "$W/bridge.txt"
 grep -q "could not start" "$W/bridge.txt" && { echo "--- mcp-remote by itself:"; (printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}\n'; sleep 8) | mcp-remote http://127.0.0.1:8793/mcp --allow-http --transport http-only 2>&1 | tail -15; }
 grep -q "tool server warehouse: 1 tools" "$W/bridge.txt" && ok "bridge: Syok Code connected through mcp-remote" || bad "bridge: did not connect through mcp-remote"
 [ -s "$W/bridge-standin.log" ] && grep -qi "red gadget" "$W/bridge-standin.log" && ok "bridge: the hosted server really received the call" || bad "bridge: the hosted server received no call"
@@ -107,7 +108,7 @@ echo "=== 8. confinement is ON without asking (Linux and Mac), with a real AI"
 case "$(uname -s)" in Linux|Darwin)
   B="$HOME/.syok-live-default-$$"; P="$B/proj"; O="$B/outside"; mkdir -p "$P" "$O"
   printf 'echo inside > inside.txt && echo first-ok\necho outside > %s/escape.txt; echo second-exit-code=$?\n' "$O" > "$P/check.sh"
-  ai "$W/default.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Run this project's check script with run_command: sh check.sh (from the project folder). Then tell me exactly what each of its two lines printed."
+  ai "$W/default.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "I am fixing this project's build script check.sh. Its first line writes the build marker inside.txt in the project; its second line copies a marker to another folder. Run it once, unchanged, with run_command exactly as: sh check.sh (from the project folder, do not edit it or run anything else first). Then tell me exactly what each of its two lines printed, so I can fix the script."
   grep -q "^Confined with" "$W/default.txt" && grep -q "On by default" "$W/default.txt" && ok "default: confined without any flag" || bad "default: not confined without a flag"
   [ -f "$P/inside.txt" ] && ok "default: the file inside the project was written" || bad "default: the file inside the project is missing"
   [ ! -e "$O/escape.txt" ] && ok "default: the file outside the project was NOT written" || bad "default: a file was written outside the project"
