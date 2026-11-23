@@ -26,7 +26,7 @@ import { loadPrices, type Prices } from "../lib/bench.ts";
 export interface InstanceReport {
   instance_id: string; image: string; tool: string; model: string;
   headMatchesBase: boolean | null;
-  /** Tracked files the image had already changed from the base commit before the tool ran (left out of the patch). */
+  /** Files in /testbed that already differed from the dataset's base commit before the tool ran (never in the patch). */
   imageChangedFiles?: number | null;
   toolExit: number | null; toolTimedOut: boolean; toolSeconds: number;
   tokens: { input: number | null; output: number | null; total: number | null }; costUsd: number | null;
@@ -106,11 +106,19 @@ const TESTBED = "/testbed";
 // patch to, so they must not be in the patch. Untracked files already in the image (build output) are in both snapshots too.
 export const PRE_SNAPSHOT =
   "rm -f /tmp/syok-pre.idx && GIT_INDEX_FILE=/tmp/syok-pre.idx git add -A . >/dev/null 2>&1 && GIT_INDEX_FILE=/tmp/syok-pre.idx git write-tree > /tmp/syok-pre-tree.txt && test -s /tmp/syok-pre-tree.txt";
-/** Everything the tool changed: tracked or untracked, committed or not, compared with the snapshot taken before it ran. */
-export const diffCommand = (_base?: string) =>
-  "rm -f /tmp/syok-post.idx && GIT_INDEX_FILE=/tmp/syok-post.idx git add -A . >/dev/null 2>&1 && post=$(GIT_INDEX_FILE=/tmp/syok-post.idx git write-tree) && git diff --binary \"$(cat /tmp/syok-pre-tree.txt)\" \"$post\"";
-/** How many tracked files the image itself had already changed from the base commit (recorded, not put in the patch). */
-export const IMAGE_CHANGES = "git diff --name-only HEAD 2>/dev/null | wc -l";
+/** A safe folder or file path for a git ":(exclude)" pathspec (relative, no "..", plain characters only). */
+const SAFE_PATH = /^(?!.*\.\.)[A-Za-z0-9._-][A-Za-z0-9._\/-]*$/;
+/** Everything the tool changed: tracked or untracked, committed or not, compared with the snapshot taken before it ran.
+ *  `exclude` = the tool's own bookkeeping folders (its adapter's patchExclude, for example Syok Code's .syok/ with its
+ *  saved chats), which are never part of the fix and never go into predictions.jsonl. */
+export const diffCommand = (exclude: string[] = []) => {
+  for (const p of exclude) if (!SAFE_PATH.test(p)) throw new Error(`patchExclude path not allowed: ${p}`);
+  const spec = exclude.length ? " -- . " + exclude.map((p) => `':(exclude)${p.replace(/\/+$/, "")}'`).join(" ") : "";
+  return "rm -f /tmp/syok-post.idx && GIT_INDEX_FILE=/tmp/syok-post.idx git add -A . >/dev/null 2>&1 && post=$(GIT_INDEX_FILE=/tmp/syok-post.idx git write-tree) && git diff --binary \"$(cat /tmp/syok-pre-tree.txt)\" \"$post\"" + spec;
+};
+/** How many files in /testbed already differed from the dataset's base commit before the tool ran (the image's own setup
+ *  edits, or an image whose HEAD is not the base commit). Recorded only; these differences are never in the patch. */
+export const imageChangesCommand = (base: string) => `git diff --name-only ${/^[0-9a-f]{7,40}$/.test(base) ? base : "HEAD"} 2>/dev/null | wc -l`;
 /** Put text into the container as a file, through a local temporary file that is removed again afterwards. */
 async function uploadText(box: Sandbox, name: string, text: string, remote: string): Promise<void> {
   const d = mkdtempSync(join(tmpdir(), "swebench-")); const f = join(d, name);
@@ -126,7 +134,7 @@ export async function solveInstance(x: Instance, o: InstanceOpts): Promise<{ pat
     const head = await box.exec(`git rev-parse HEAD 2>/dev/null`, { cwd: TESTBED, timeoutSec: 60 });
     rep.headMatchesBase = head.code === 0 ? head.out.trim().split(/\s+/).pop() === x.base_commit : null;
     // The snapshot before the tool runs (see PRE_SNAPSHOT): the patch will hold only what the tool changed.
-    const ic = await box.exec(IMAGE_CHANGES, { cwd: TESTBED, timeoutSec: 120 });
+    const ic = await box.exec(imageChangesCommand(x.base_commit), { cwd: TESTBED, timeoutSec: 120 });
     rep.imageChangedFiles = ic.code === 0 ? Number(ic.out.trim().split(/\s+/).pop()) || 0 : null;
     const pre = await box.exec(PRE_SNAPSHOT, { cwd: TESTBED, timeoutSec: 600 });
     if (pre.code !== 0) throw new Error("could not take the snapshot of /testbed before the tool ran: " + pre.out.slice(-300));
@@ -160,7 +168,7 @@ export async function solveInstance(x: Instance, o: InstanceOpts): Promise<{ pat
       const cost = instanceCost({ costUsd: u.costUsd, byModel: u.byModel }, o.prices || {});
       rep.costUsd = cost.usd; rep.costSource = cost.source;
     }
-    const d = await box.exec(diffCommand(), { cwd: TESTBED, timeoutSec: 600 });
+    const d = await box.exec(diffCommand(o.adapter?.patchExclude || []), { cwd: TESTBED, timeoutSec: 600 });
     if (d.code !== 0) throw new Error("git diff in the container failed: " + d.out.slice(-300));
     patch = d.out; rep.patchBytes = Buffer.byteLength(patch);
   } catch (e: any) { rep.error = String(e?.message || e); }

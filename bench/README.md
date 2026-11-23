@@ -177,7 +177,9 @@ bun bench/swebench/run.ts --dataset verified.jsonl --n 5 --seed 42 --tool syok -
 - The patch is everything the tool changed in `/testbed`: the difference between a snapshot taken just before the tool starts
   and one taken after it stops (git trees written through a separate index, so the repository itself is not touched). Edits the
   image had already made to tracked files (the sphinx images change `tox.ini` during setup) and untracked files already in the
-  image stay out of the patch; `imageChangedFiles` in results.json records how many tracked files the image had changed.
+  image stay out of the patch; `imageChangedFiles` in results.json records how many files already differed from the dataset's
+  base commit before the tool ran. A tool's own bookkeeping folder (its adapter's `patchExclude`: `.syok/` for Syok Code,
+  where it saves each chat) is never put in the patch, so predictions hold only code changes and no chat transcripts.
 - Images are big (several GB each), and the official advice is an x86_64 machine with about 120 GB free disk, 16 GB RAM and
   8 CPU cores for a full run.
 
