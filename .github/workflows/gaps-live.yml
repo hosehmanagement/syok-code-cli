@@ -1,5 +1,6 @@
 name: 0.14 features live test
-# With a real AI through your Syok key: syok doctor, find_symbol, a custom helper, a hosted tool server and --confine.
+# With a real AI through your Syok key: syok doctor, find_symbol, a custom helper, a hosted tool server, --confine, and the 0.22 tools
+# (the todo list through a shortened chat, lsp rename, peek_file, view_image with a model that can see pictures, interactive terminals).
 # Runs from the source and from the one-file program. Uses the repository secrets SYOK_BASE_URL and SYOK_API_KEY.
 on:
   workflow_dispatch:
@@ -8,7 +9,7 @@ on:
         description: "Model or preset"
         default: "syok-coder"
   pull_request:
-    paths: ['src/doctor.ts', 'src/agents.ts', 'src/mcp.ts', 'src/confine.ts', 'src/symbols.ts', 'src/mcp-auth.ts', 'src/lsp.ts', 'src/memory.ts', 'src/parallel.ts', 'src/confine-win.ts', 'test/live/gaps-live.sh', 'test/live/mcp-standin.ts', 'test/live/oauth-standin.ts', '.github/workflows/gaps-live.yml']
+    paths: ['src/doctor.ts', 'src/agents.ts', 'src/mcp.ts', 'src/confine.ts', 'src/symbols.ts', 'src/mcp-auth.ts', 'src/lsp.ts', 'src/memory.ts', 'src/parallel.ts', 'src/confine-win.ts', 'src/todo.ts', 'src/compactor.ts', 'src/peek.ts', 'src/image.ts', 'src/pty.ts', 'test/live/gaps-live.sh', 'test/live/make-fixture.py', 'test/live/mcp-standin.ts', 'test/live/oauth-standin.ts', '.github/workflows/gaps-live.yml']
 permissions:
   contents: read
 jobs:
@@ -20,7 +21,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
       SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
