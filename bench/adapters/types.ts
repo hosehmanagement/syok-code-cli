@@ -29,6 +29,8 @@ export interface Usage {
   /** Models the tool's output says answered (for the same-model check). Empty = the tool did not say. */
   modelsSeen: string[];
   ok: boolean | null;       // the tool's own success flag, when it has one
+  /** Tokens per answering "<provider> / <model>", when the tool says so (Syok Code's usage.by). */
+  byModel?: Record<string, { steps: number; input: number; output: number }>;
 }
 export interface Adapter {
   name: "syok" | "claude" | "codex" | "cursor" | "fake";

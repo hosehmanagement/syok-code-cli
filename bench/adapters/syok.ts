@@ -26,13 +26,26 @@ export const syok: Adapter = {
   docs: ["src/main.ts (syok --help) in this repository"],
   unverified: [],
   notes: [
-    "Syok routes between providers. For a fair test the Syok key must be pinned to ONE provider and ONE model (make a key in Syok, Work, API Keys that only has that model), " +
-      "otherwise a run can be answered by a different model than the other tools use. After each run the bench reads which provider/model answered from the --json usage and marks the run if any other model answered.",
+    "Syok routes between providers. For a fair test the Syok account behind the key must have ONE provider connected, " +
+      "otherwise a run can be answered by a different model than the other tools use. Syok Code sends tool-calling requests, and for those the router " +
+      "(syok-ai-router src/tools.ts, routeToolChat, checked 23 Nov 2026) sends each provider's own model and does NOT use the --model name, except that " +
+      "syok-coder / syok-code puts code-strong providers first; the X-Syok-Lock header (one provider only) is refused with tools; when every provider fails, Syok's built-in free model answers. " +
+      "After each run the bench reads which provider/model answered from the --json usage and marks the run if any other model answered.",
   ],
   authEnv: ["SYOK_BASE_URL", "SYOK_API_KEY"],
   // Inside a SWE-bench container: this repository's own one-line installer (install/install.sh) is copied in and run.
-  containerUpload: [{ local: resolve(import.meta.dir, "..", "..", "install", "install.sh"), remote: "/tmp/syok-install.sh" }],
-  containerInstall: ["SYOK_HOME=/opt/syok sh /tmp/syok-install.sh && ln -sf /opt/syok/bin/syok /usr/local/bin/syok"],
+  // It installs the PUBLISHED Syok Code. To test this checkout instead, build the one-file program
+  // (bun build src/main.ts --target=bun --minify --outfile syok.js) and set SYOK_BENCH_BUNDLE to its path: it then replaces the
+  // published one inside the container (the installer still brings the Bun runtime).
+  get containerUpload() {
+    const up = [{ local: resolve(import.meta.dir, "..", "..", "install", "install.sh"), remote: "/tmp/syok-install.sh" }];
+    if (process.env.SYOK_BENCH_BUNDLE) up.push({ local: resolve(process.env.SYOK_BENCH_BUNDLE), remote: "/tmp/syok-bundle.js" });
+    return up;
+  },
+  get containerInstall() {
+    return ["SYOK_HOME=/opt/syok sh /tmp/syok-install.sh && ln -sf /opt/syok/bin/syok /usr/local/bin/syok" +
+      (process.env.SYOK_BENCH_BUNDLE ? " && cp /tmp/syok-bundle.js /opt/syok/syok.js && syok --help >/dev/null" : "")];
+  },
   async check() {
     const bin = syokBin();
     const installed = bin[0] === process.execPath ? existsSync(bin[1]) : true;
@@ -55,6 +68,7 @@ export const syok: Adapter = {
     u.inputTokens = num(us.input); u.outputTokens = num(us.output); u.totalTokens = num(us.total) ?? num(j.tokens);
     u.steps = num(j.steps);
     u.modelsSeen = Object.keys(us.by || {});
+    if (us.by && typeof us.by === "object") u.byModel = us.by;
     u.ok = j.stopped ? j.stopped === "finished" || j.stopped === "answered" : null;
     return u;
   },

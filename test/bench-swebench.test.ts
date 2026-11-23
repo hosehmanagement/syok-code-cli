@@ -8,8 +8,9 @@ import { spawnSync } from "node:child_process";
 import { officialImage, normalize, readDataset, select, predictionLine, promptFor, type Instance } from "../bench/swebench/dataset.ts";
 import { grade, parsePytest, parseDjango, parseSympy, testSection } from "../bench/swebench/grade.ts";
 import { dockerBackend, modalBackend, MERGE, type Backend, type Sandbox } from "../bench/swebench/backends.ts";
-import { solveInstance, quickGrade } from "../bench/swebench/run.ts";
+import { solveInstance, quickGrade, instanceCost, outcomeOf, resultsTable } from "../bench/swebench/run.ts";
 import type { Adapter } from "../bench/adapters/types.ts";
+import { syok } from "../bench/adapters/syok.ts";
 import { noUsage } from "../bench/adapters/types.ts";
 import { tmpDir } from "./helpers.ts";
 
@@ -153,6 +154,59 @@ test("solveInstance: the patch holds the tool's edits and new files, NOT the unt
   expect(patch).toContain("diff --git a/added.py b/added.py");
   expect(patch).not.toContain("junk.py");
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+test("solveInstance passes --max-steps to the tool and records which models answered, provider switches and cost (unknown without prices)", async () => {
+  const { be, dirs } = localBackend();
+  const probe = await be.start("x", { timeoutSec: 10 }); const base = head(probe.id);
+  let seenSteps: number | undefined;
+  const out = '(switched provider: groq -> mistral)\n{"summary":"done","steps":3,"stopped":"finished","usage":{"input":100,"output":20,"total":120,"steps":3,"by":{"groq / gpt-oss-120b":{"steps":1,"input":40,"output":5},"mistral / codestral-latest":{"steps":2,"input":60,"output":15}}}}';
+  const tool: Adapter = { ...syok, containerInstall: [], command: (c) => { seenSteps = c.limits.maxSteps; return { cmd: ["sh", "-c", "printf 'v = 2\\n' > app.py; cat <<'EOF'\n" + out + "\nEOF"], enforced: ["steps"] }; } };
+  const x: Instance = normalize(row({ base_commit: base }));
+  const o = { backend: be, tool: "syok", adapter: tool, model: "syok-coder", timeoutSec: 60, maxSteps: 7, doGrade: false, skipInstall: true, logDir: tmpDir("sb-logs-") };
+  const { report } = await solveInstance(x, o);
+  expect(report.error).toBeUndefined();
+  expect(seenSteps).toBe(7);
+  expect(report.modelsSeen).toEqual(["groq / gpt-oss-120b", "mistral / codestral-latest"]);
+  expect(report.byModel!["mistral / codestral-latest"]).toEqual({ steps: 2, input: 60, output: 15 });
+  expect(report.switches).toEqual(["(switched provider: groq -> mistral)"]);
+  expect(report.tokens).toEqual({ input: 100, output: 20, total: 120 });
+  expect(report.costUsd).toBeNull(); expect(report.costSource).toBe("unknown");
+  const priced = await solveInstance(x, { ...o, prices: { "gpt-oss": { in: 1, out: 2 }, codestral: { in: 10, out: 20 } } });
+  expect(priced.report.costSource).toBe("prices");
+  expect(priced.report.costUsd).toBeCloseTo((40 * 1 + 5 * 2 + 60 * 10 + 15 * 20) / 1e6, 12);
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+test("instanceCost: the tool's own number first; one unpriced model makes the run unknown (never guessed)", () => {
+  expect(instanceCost({ costUsd: 0.5 }, {})).toEqual({ usd: 0.5, source: "tool" });
+  expect(instanceCost({ costUsd: null, byModel: { "a / m1": { input: 1e6, output: 0 } } }, {})).toEqual({ usd: null, source: "unknown" });
+  expect(instanceCost({ costUsd: null, byModel: { "a / m1": { input: 1e6, output: 0 }, "b / m2": { input: 1, output: 1 } } }, { m1: { in: 3 } })).toEqual({ usd: null, source: "unknown" });
+  expect(instanceCost({ costUsd: null, byModel: { "a / m1": { input: 1e6, output: 1e6 } } }, { m1: { in: 3, out: 5 } })).toEqual({ usd: 8, source: "prices" });
+});
+test("outcomeOf and the results table: resolved only when the quick grade says so, and the table is labelled quick-grade, not official", () => {
+  const base: any = { instance_id: "a__b-1", image: "i", tool: "syok", model: "syok-coder", headMatchesBase: true, toolExit: 0, toolTimedOut: false, toolSeconds: 12, tokens: { input: 10, output: 2, total: 12 }, costUsd: null, costSource: "unknown", patchBytes: 50 };
+  const g = (resolved: boolean, applied = true) => ({ resolved, applied, note: "n", parser: "pytest", failToPass: { passed: resolved ? 1 : 0, total: 1, failing: [] }, passToPass: { passed: 2, total: 2, failing: [] } });
+  expect(outcomeOf({ ...base, quickGrade: g(true) })).toBe("resolved");
+  expect(outcomeOf({ ...base, quickGrade: g(false) })).toBe("wrong-patch");
+  expect(outcomeOf({ ...base, quickGrade: g(false, false) })).toBe("did-not-apply");
+  expect(outcomeOf({ ...base, patchBytes: 0, quickGrade: { skipped: "empty patch" } })).toBe("no-patch");
+  expect(outcomeOf({ ...base, toolTimedOut: true, quickGrade: g(false) })).toBe("timeout");
+  expect(outcomeOf({ ...base, error: "boom", quickGrade: { skipped: "x" } })).toBe("error");
+  const reps = [{ ...base, quickGrade: g(true), outcome: "resolved", byModel: { "groq / m": { steps: 3, input: 10, output: 2 } } }, { ...base, instance_id: "a__b-2", quickGrade: g(false), outcome: "wrong-patch" }];
+  const md = resultsTable({ tool: "syok", model: "syok-coder", backend: "docker", gradedBy: "quick", maxSpendUsd: 5, spentUsd: null }, reps);
+  expect(md).toContain("**1/2 resolved: quick-grade, not official.**");
+  expect(md).toContain("| a__b-1 | resolved | 50 | 1/1 | 2/2 | 12 | 10 / 2 | unknown | groq / m (3 steps) |");
+  expect(md).toContain("Money used: unknown");
+});
+test("Syok adapter: SYOK_BENCH_BUNDLE puts this checkout's build into the container instead of the published one", () => {
+  const old = process.env.SYOK_BENCH_BUNDLE;
+  try {
+    delete process.env.SYOK_BENCH_BUNDLE;
+    expect(syok.containerUpload!.map((u) => u.remote)).toEqual(["/tmp/syok-install.sh"]);
+    expect(syok.containerInstall![0]).not.toContain("syok-bundle.js");
+    process.env.SYOK_BENCH_BUNDLE = "/x/syok.js";
+    expect(syok.containerUpload!.map((u) => u.remote)).toEqual(["/tmp/syok-install.sh", "/tmp/syok-bundle.js"]);
+    expect(syok.containerInstall![0]).toContain("cp /tmp/syok-bundle.js /opt/syok/syok.js");
+  } finally { if (old === undefined) delete process.env.SYOK_BENCH_BUNDLE; else process.env.SYOK_BENCH_BUNDLE = old; }
 });
 test("gold pseudo-tool + quick grade: the reference patch is applied in a fresh container and eval_script decides", async () => {
   const { be, dirs } = localBackend();

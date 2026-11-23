@@ -6,6 +6,12 @@
 // Tools: syok, claude, codex, cursor; and two pseudo-tools that spend nothing: gold (applies the dataset's reference fix) and noop.
 // Options: --timeout <sec per instance, default 1800>  --out <folder, default bench/swebench/out>  --platform linux/amd64
 //          --max-spend <usd, default 5>  --cost-per-instance <usd, default 2>  --skip-install (the tool is already in the image)
+//          --max-steps <n> (passed to tools that can stop themselves after n steps: Syok Code, Claude Code)
+// Spending: before starting, the plan's worst case (--cost-per-instance x instances) must be within --max-spend (or --yes).
+// While running, the money used so far (the tool's own number, else bench/prices.json) is added up, and no new instance is
+// started once it reaches --max-spend. When a tool reports no money amount and no price matches, the live total is "unknown":
+// then only the time limit and --max-steps bound the run, and the results say so.
+// Output: predictions.jsonl, results.json (report.json is the same file, kept for older readers), results.md (the table).
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -15,17 +21,79 @@ import type { Adapter } from "../adapters/types.ts";
 import { readDataset, select, predictionLine, promptFor, type Instance } from "./dataset.ts";
 import { dockerBackend, modalBackend, type Backend, type Sandbox } from "./backends.ts";
 import { grade, type Grade } from "./grade.ts";
+import { loadPrices, type Prices } from "../lib/bench.ts";
 
 export interface InstanceReport {
   instance_id: string; image: string; tool: string; model: string;
   headMatchesBase: boolean | null;
   toolExit: number | null; toolTimedOut: boolean; toolSeconds: number;
   tokens: { input: number | null; output: number | null; total: number | null }; costUsd: number | null;
+  /** Where costUsd came from: the tool itself, bench/prices.json, or nobody (unknown; never guessed). */
+  costSource?: "tool" | "prices" | "unknown" | "none";
+  /** Which "<provider> / <model>" answered, with its share of steps and tokens (only what the tool itself reported). */
+  modelsSeen?: string[];
+  byModel?: Record<string, { steps: number; input: number; output: number }>;
+  /** The tool's own notes that the provider changed during the run (Syok Code prints "(switched provider: a -> b)"). */
+  switches?: string[];
+  steps?: number | null;
   patchBytes: number;
   quickGrade: (Grade & { applied: boolean; note: string }) | { skipped: string };
+  /** One word for the result: resolved, no-patch, did-not-apply, wrong-patch, timeout, error, not-graded. */
+  outcome?: string;
   error?: string;
 }
-export interface InstanceOpts { backend: Backend; tool: string; adapter?: Adapter; model: string; timeoutSec: number; doGrade: boolean; platform?: string; skipInstall?: boolean; logDir: string }
+export interface InstanceOpts { backend: Backend; tool: string; adapter?: Adapter; model: string; timeoutSec: number; maxSteps?: number; doGrade: boolean; platform?: string; skipInstall?: boolean; logDir: string; prices?: Prices }
+
+/** Cost of one run: the tool's own number; else every answering model priced from bench/prices.json; else unknown. */
+export function instanceCost(u: { costUsd: number | null; byModel?: Record<string, { input: number; output: number }> }, prices: Prices): { usd: number | null; source: "tool" | "prices" | "unknown" } {
+  if (u.costUsd !== null) return { usd: u.costUsd, source: "tool" };
+  const by = Object.entries(u.byModel || {});
+  const keys = Object.keys(prices).sort((a, b) => b.length - a.length);
+  if (!by.length || !keys.length) return { usd: null, source: "unknown" };
+  let usd = 0;
+  for (const [name, b] of by) {
+    const k = keys.find((x) => name.toLowerCase().includes(x.toLowerCase()));
+    if (!k) return { usd: null, source: "unknown" }; // one unpriced model makes the whole run unknown
+    usd += (b.input * (prices[k].in ?? 0) + b.output * (prices[k].out ?? 0)) / 1e6;
+  }
+  return { usd, source: "prices" };
+}
+/** One word for what happened (a run counts as solved only when the quick grade says RESOLVED). */
+export function outcomeOf(r: InstanceReport): string {
+  const g: any = r.quickGrade;
+  if (g && "resolved" in g && g.resolved) return "resolved";
+  if (r.error) return "error";
+  if (r.toolTimedOut) return "timeout";
+  if (!r.patchBytes) return "no-patch";
+  if (g && "resolved" in g) return g.applied ? "wrong-patch" : "did-not-apply";
+  return "not-graded";
+}
+const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+/** The Markdown table for results.md and the GitHub job summary. */
+export function resultsTable(meta: { tool: string; model: string; backend: string; gradedBy: string; maxSpendUsd?: number; spentUsd: number | null; stoppedEarly?: string }, reports: InstanceReport[]): string {
+  const resolved = reports.filter((r) => r.outcome === "resolved").length;
+  const fmtTok = (n: number | null) => (n === null ? "unknown" : String(n));
+  const money = (r: InstanceReport) => (r.costUsd === null ? (r.costSource === "none" ? "$0" : "unknown") : "$" + r.costUsd.toFixed(4) + (r.costSource === "prices" ? " (est.)" : ""));
+  const L = [
+    `### SWE-bench Verified pilot: ${meta.tool}${meta.tool === meta.model ? "" : " (model asked: " + meta.model + ")"}`,
+    "",
+    `**${resolved}/${reports.length} resolved: quick-grade, not official.** Graded by: ${meta.gradedBy}. Backend: ${meta.backend}.`,
+    "",
+    "| Instance | Outcome | Patch bytes | FAIL_TO_PASS | PASS_TO_PASS | Tool time (s) | Tokens in / out | Cost | Models that answered | Note |",
+    "|---|---|---|---|---|---|---|---|---|---|",
+  ];
+  for (const r of reports) {
+    const g: any = r.quickGrade;
+    const f2p = "resolved" in g ? `${g.failToPass.passed}/${g.failToPass.total}` : "-", p2p = "resolved" in g ? `${g.passToPass.passed}/${g.passToPass.total}` : "-";
+    const models = r.byModel && Object.keys(r.byModel).length ? Object.entries(r.byModel).map(([k, v]) => `${k} (${v.steps} steps)`).join("; ") : (r.modelsSeen || []).join("; ") || (r.tool === "gold" || r.tool === "noop" ? "none (no AI)" : "not reported");
+    const note = r.error ? r.error.slice(0, 200) : "skipped" in g ? g.skipped : g.applied ? g.note : g.note.slice(0, 200);
+    L.push(`| ${r.instance_id} | ${r.outcome} | ${r.patchBytes} | ${f2p} | ${p2p} | ${r.toolSeconds}${r.toolTimedOut ? " (time limit)" : ""} | ${fmtTok(r.tokens.input)} / ${fmtTok(r.tokens.output)} | ${money(r)} | ${cell(models)} | ${cell(note)}${r.switches?.length ? " Provider switches: " + r.switches.length + "." : ""} |`);
+  }
+  L.push("", `Money used: ${meta.spentUsd === null ? "unknown (the tool reports no money amount and bench/prices.json has no matching price)" : "$" + meta.spentUsd.toFixed(4)}` +
+    (meta.maxSpendUsd !== undefined ? `; cap $${meta.maxSpendUsd}` : "") + (meta.stoppedEarly ? `. STOPPED EARLY: ${meta.stoppedEarly}` : "") + ".",
+    "", "The quick grade is a simplified copy of the official SWE-bench log readers, not the official harness. Only the official harness gives a real score.");
+  return L.join("\n") + "\n";
+}
 
 const TESTBED = "/testbed";
 export const PRE_UNTRACKED = "git ls-files --others --exclude-standard > /tmp/syok-pre-untracked.txt";
@@ -51,6 +119,7 @@ export async function solveInstance(x: Instance, o: InstanceOpts): Promise<{ pat
     const pre = await box.exec(PRE_UNTRACKED, { cwd: TESTBED, timeoutSec: 120 });
     if (pre.code !== 0) throw new Error("could not list the files already in /testbed: " + pre.out.slice(-300));
     if (o.tool === "gold" || o.tool === "noop") {
+      rep.costUsd = 0; rep.costSource = "none"; // no AI is called
       if (o.tool === "gold") {
         if (!x.patch) throw new Error("this dataset row has no reference patch, so the gold pseudo-tool cannot run");
         await uploadText(box, "gold.patch", x.patch, "/tmp/gold.patch");
@@ -66,14 +135,18 @@ export async function solveInstance(x: Instance, o: InstanceOpts): Promise<{ pat
           if (r.code !== 0) throw new Error(`installing ${ad.label} in the container failed (${line}): ${r.out.trim().slice(-400)}`);
         }
       }
-      const c = ad.command({ prompt: promptFor(x, TESTBED), cwd: TESTBED, model: o.model, limits: { timeSec: o.timeoutSec }, inContainer: true });
+      const c = ad.command({ prompt: promptFor(x, TESTBED), cwd: TESTBED, model: o.model, limits: { timeSec: o.timeoutSec, ...(o.maxSteps ? { maxSteps: o.maxSteps } : {}) }, inContainer: true });
       const envLine = Object.entries(c.env || {}).map(([k, v]) => `export ${k}=${q(v)}; `).join("");
       const t0 = Date.now();
       const r = await box.exec(envLine + c.cmd.map(q).join(" "), { cwd: TESTBED, timeoutSec: o.timeoutSec, env: ad.authEnv });
       rep.toolSeconds = Math.round((Date.now() - t0) / 1000); rep.toolExit = r.code; rep.toolTimedOut = r.timedOut;
       writeFileSync(join(o.logDir, x.instance_id + ".tool.txt"), r.out);
       const u = ad.parse(r.out, "");
-      rep.tokens = { input: u.inputTokens, output: u.outputTokens, total: u.totalTokens }; rep.costUsd = u.costUsd;
+      rep.tokens = { input: u.inputTokens, output: u.outputTokens, total: u.totalTokens };
+      rep.modelsSeen = u.modelsSeen; if (u.byModel) rep.byModel = u.byModel; rep.steps = u.steps;
+      rep.switches = r.out.split(/\r?\n/).filter((l) => /switched provider/i.test(l)).map((l) => l.trim().slice(0, 300)).slice(0, 50);
+      const cost = instanceCost({ costUsd: u.costUsd, byModel: u.byModel }, o.prices || {});
+      rep.costUsd = cost.usd; rep.costSource = cost.source;
     }
     const d = await box.exec(diffCommand(x.base_commit), { cwd: TESTBED, timeoutSec: 120 });
     if (d.code !== 0) throw new Error("git diff in the container failed: " + d.out.slice(-300));
@@ -131,19 +204,34 @@ async function main(): Promise<number> {
   const logDir = join(out, "logs"); mkdirSync(logDir, { recursive: true });
   const predFile = join(out, "predictions.jsonl");
   const reports: InstanceReport[] = [];
-  const o: InstanceOpts = { backend, tool, adapter, model, timeoutSec, doGrade: has("--grade"), platform: arg("--platform") || undefined, skipInstall: has("--skip-install"), logDir };
+  const maxSteps = arg("--max-steps") ? +arg("--max-steps") : undefined;
+  const cap = +arg("--max-spend", "5");
+  const o: InstanceOpts = { backend, tool, adapter, model, timeoutSec, maxSteps, doGrade: has("--grade"), platform: arg("--platform") || undefined, skipInstall: has("--skip-install"), logDir, prices: loadPrices(join(import.meta.dir, "..", "prices.json")) };
   const modelName = pseudo ? tool : `${tool}__${model}`;
+  let spent: number | null = 0, stoppedEarly = "";
+  const notRun: string[] = [];
   for (const x of picked) {
+    if (spent !== null && spent >= cap) { notRun.push(x.instance_id); stoppedEarly ||= `the money used ($${spent.toFixed(4)}) reached --max-spend $${cap}; instances not started: `; continue; }
     console.log(`${x.instance_id}: image ${x.image}${x.imageFromRow ? "" : " (name built from the official rule; the row has no image field)"}`);
     const { patch, report } = await solveInstance(x, o);
     appendFileSync(predFile, predictionLine(x.instance_id, modelName, patch) + "\n");
     if (o.doGrade && !report.error) { try { report.quickGrade = await quickGrade(x, patch, o); } catch (e: any) { report.quickGrade = { skipped: "quick grade failed: " + String(e?.message || e) }; } }
+    report.outcome = outcomeOf(report);
     reports.push(report);
+    if (report.costUsd === null) { if (spent !== null) console.log("  The money used is unknown (the tool reports none and no price matches): from now on only the time limit and --max-steps bound the run."); spent = null; }
+    else if (spent !== null) spent += report.costUsd;
     const g: any = report.quickGrade;
-    console.log(`  patch ${report.patchBytes} bytes, tool ${report.toolSeconds}s${report.toolTimedOut ? " (TIMED OUT)" : ""}${report.error ? ", ERROR " + report.error.slice(0, 300) : ""}${"resolved" in g ? `, quick grade: ${g.resolved ? "RESOLVED" : "not resolved"} (FAIL_TO_PASS ${g.failToPass.passed}/${g.failToPass.total}, PASS_TO_PASS ${g.passToPass.passed}/${g.passToPass.total})` : g.skipped ? ", quick grade skipped: " + g.skipped : ""}`);
+    console.log(`  patch ${report.patchBytes} bytes, tool ${report.toolSeconds}s${report.toolTimedOut ? " (TIMED OUT)" : ""}${report.error ? ", ERROR " + report.error.slice(0, 300) : ""}${"resolved" in g ? `, quick grade: ${g.resolved ? "RESOLVED" : "not resolved"} (FAIL_TO_PASS ${g.failToPass.passed}/${g.failToPass.total}, PASS_TO_PASS ${g.passToPass.passed}/${g.passToPass.total})` : g.skipped ? ", quick grade skipped: " + g.skipped : ""}` +
+      (report.modelsSeen?.length ? `; answered by: ${report.modelsSeen.join(", ")}` : ""));
   }
-  writeFileSync(join(out, "report.json"), JSON.stringify({ tool, model, backend: backend.name, gradedBy: o.doGrade ? "quick local grade only (NOT the official harness)" : "not graded", reports }, null, 2));
-  console.log(`\nWrote ${predFile}\n      ${join(out, "report.json")}\n` +
+  if (notRun.length) { stoppedEarly += notRun.join(", "); console.log("STOPPED EARLY: " + stoppedEarly); }
+  const gradedBy = o.doGrade ? "quick local grade only (NOT the official harness)" : "not graded";
+  const result = { tool, model, backend: backend.name, gradedBy, maxSteps: maxSteps ?? null, timeoutSec, maxSpendUsd: cap, spentUsd: spent, stoppedEarly: stoppedEarly || null, notRun,
+    resolved: reports.filter((r) => r.outcome === "resolved").length, total: reports.length, reports };
+  writeFileSync(join(out, "results.json"), JSON.stringify(result, null, 2));
+  writeFileSync(join(out, "report.json"), JSON.stringify(result, null, 2));
+  writeFileSync(join(out, "results.md"), resultsTable({ tool, model, backend: backend.name, gradedBy, maxSpendUsd: pseudo ? undefined : cap, spentUsd: spent, stoppedEarly }, reports));
+  console.log(`\nWrote ${predFile}\n      ${join(out, "results.json")}\n      ${join(out, "results.md")}\n` +
     `This is NOT an official score. Grade the predictions with the official harness (see bench/README.md):\n` +
     `  swebench eval verified -p ${predFile} --run-id ${stamp} -j 4\n  (older harness: python -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Verified --predictions_path ${predFile} --max_workers 4 --run_id ${stamp})`);
   return 0;

@@ -37,8 +37,13 @@ notes any other model in the table.
 - `--model <name>` pins all tools; `--model-<tool> <name>` pins one tool (for example `--model-codex gpt-5`).
 - If a tool spells the same model differently, write `--model-<tool> <its spelling>=<common name>`. The first part is passed
   to the tool, the second is used for the check.
-- **Syok Code routes between providers.** For a fair test, make a Syok key that only has the one model you are testing
-  (Syok, Work, API Keys), so no other provider can answer. The table notes it if another model answered anyway.
+- **Syok Code routes between providers, and `--model` does not pin it.** Syok Code sends tool-calling requests. For those
+  the Syok router sends each provider its own model and ignores the model name, except that `syok-coder` puts the
+  code-strong providers first (syok-ai-router `src/tools.ts` `routeToolChat` and `src/smartrouting.ts` `taskFromModel`,
+  checked 23 Nov 2026). The one-provider header `X-Syok-Lock` is refused for tool requests, and when every provider fails,
+  Syok's built-in free model answers. So for a fair test the Syok account behind the key must have only the one provider
+  connected. Either way the bench records which `<provider> / <model>` answered each run (from Syok Code's `--json`
+  `usage.by`) and every `(switched provider: a -> b)` note, and the table shows them.
 
 ## Step 1: install the tools
 
@@ -175,6 +180,24 @@ bun bench/swebench/run.ts --dataset verified.jsonl --n 5 --seed 42 --tool syok -
 
 Output in `bench/swebench/out/<time>-<tool>/`: `predictions.jsonl` (official format: `instance_id`, `model_name_or_path`,
 `model_patch`), `report.json` and logs.
+
+Each run folder also has `results.json` (everything, plus the money used and any early stop; `report.json` is the same file)
+and `results.md` (the table). `--max-steps <n>` stops Syok Code or Claude Code after n steps. Money: before starting, the
+worst case (`--cost-per-instance` times the instances) must be within `--max-spend`; while running, no new instance starts
+once the money used reaches `--max-spend`. Syok Code reports tokens but no money amount, so unless `bench/prices.json` has a
+price for every model that answered, the money used is "unknown" and only the time limit and `--max-steps` bound the run.
+Outcomes: `resolved`, `wrong-patch` (applied, tests fail), `did-not-apply`, `no-patch`, `timeout`, `error`.
+
+### In the cloud (GitHub Actions): the pilot workflow
+
+Actions > "bench pilot (SWE-bench Verified)" > Run workflow. It runs on GitHub's Ubuntu machine with Docker, so nothing runs
+on your computer. Inputs: `tool` (`gold`, `noop`, `syok`, or a comma list such as `gold,noop`), `n` (default 5, fixed seed
+42) or `ids`, `model`, `max_spend_usd` (default 5), `cost_per_instance_usd`, `max_steps`, `timeout_sec`, `official`. For
+`syok` it builds Syok Code from the commit being run and puts that build in the containers (`SYOK_BENCH_BUNDLE`), with the
+repository secrets `SYOK_BASE_URL` and `SYOK_API_KEY` (the address is hidden in the logs and removed from the uploaded files).
+After the quick grade it grades the same predictions with the official harness (`pip install swebench==5.0.2`,
+`swebench eval verified`). The job summary shows both; the artifact holds `predictions.jsonl`, `results.json`, `results.md`,
+the official report and all logs. The pilot's instances were fixed before any run in `bench/swebench/pilot-ids.txt`.
 
 ### Grade
 
