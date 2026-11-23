@@ -172,6 +172,15 @@ kill $OP 2>/dev/null
 FIX="$(dirname "$0")/make-fixture.py"
 # Which model answered a run, from its usage line ("answered by claude / claude-sonnet-5 (3 steps)").
 who() { grep -Eo 'answered by [^;]*' "$1" | tail -1 | sed -E 's/\)$//'; }
+# What a run did: the model, every tool call it made, and (from the saved chat) the start of every read_file result.
+show() { echo "(model: $(who "$1"))"; echo "--- tool calls:"; grep -E '^> ' "$1" | cut -c1-240; echo "---"; }
+SESSION_JS='const fs = require("fs"), d = process.argv[1] + "/.syok/sessions";
+let f = []; try { f = fs.readdirSync(d).filter((x) => x.endsWith(".json")).map((x) => d + "/" + x).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs); } catch {}
+const m = f.length ? JSON.parse(fs.readFileSync(f[0], "utf8")).messages || [] : [];
+const res = new Map(m.filter((x) => x.role === "tool").map((x) => [x.tool_call_id, String(x.content)]));
+for (const x of m) for (const c of x.tool_calls || []) if (c.function?.name === "read_file") { let a = {}; try { a = JSON.parse(c.function.arguments || "{}"); } catch {}
+  console.log("  " + JSON.stringify(a.path) + " -> " + JSON.stringify((res.get(c.id) ?? "(no result)").slice(0, 160))); }'
+reads() { echo "--- read_file results (from the saved chat):"; bun -e "$SESSION_JS" "$1"; echo "---"; }
 
 echo "=== 12. the todo list with a real AI, kept through a shortened chat: three sessions, the fact only the list still holds"
 # profiles.json in the project makes the chat be shortened (summarized) early, as in a long task. The release code is read
@@ -183,13 +192,14 @@ CODE="RC-$(python3 -I -c 'import random;r=random.SystemRandom();print("%04d-%s"%
 { for i in $(seq 1 40); do echo "# release notes: line $i of the changelog, nothing to do here, keep reading until the release code line"; done; echo "RELEASE_CODE=$CODE"; echo "# end"; } > "$P/notes/release.txt"
 printf '{ "short-room": { "compactAtChars": 1500, "keepRecent": 2 } }\n' > "$P/profiles.json"
 TODO_RUN=(--cwd "$P" --mode auto --no-checks --profile short-room --model "$MODEL")
-ai "$W/todo1.txt" "${TODO_RUN[@]}" -p "We prepare this project's release in three short sessions; this is session 1. First read notes/release.txt and find the line that starts with RELEASE_CODE=. Then make a todo list with the todo tool (action set) with exactly these five items, in this order, with ids 1 to 5: 1 'Create out/one.txt containing alpha', 2 'Create out/two.txt containing beta', 3 'Create out/three.txt containing gamma', 4 'Create out/four.txt containing delta', 5 'Report release code X' where X is the value after RELEASE_CODE=. Then do item 1 only and mark it done. Items 2 to 5 belong to the next sessions: leave them pending and call finish (if you are reminded about open items, call finish again)."; tail -12 "$W/todo1.txt"; echo "(model: $(who "$W/todo1.txt"))"
+ai "$W/todo1.txt" "${TODO_RUN[@]}" -p "We prepare this project's release in three short sessions; this is session 1. First read notes/release.txt and find the line that starts with RELEASE_CODE=. Then make a todo list with the todo tool (action set) with exactly these five items, in this order, with ids 1 to 5: 1 'Create out/one.txt containing alpha', 2 'Create out/two.txt containing beta', 3 'Create out/three.txt containing gamma', 4 'Create out/four.txt containing delta', 5 'Report release code X' where X is the value after RELEASE_CODE=. Then do item 1 only and mark it done. Items 2 to 5 belong to the next sessions: leave them pending and call finish (if you are reminded about open items, call finish again)."; tail -12 "$W/todo1.txt"; show "$W/todo1.txt"; reads "$P"
 order="$(grep -E '^\[.\] [1-5]\. ' "$W/todo1.txt" | head -5 | sed -E 's/^\[.\] ([1-5])\. .*/\1/' | tr -d '\n')"
 [ "$order" = "12345" ] && grep -qE "^\[.\] 5\. .*$CODE" "$W/todo1.txt" && ok "todo: session 1 made the five-item list in order, item 5 holds the code" || bad "todo: session 1 list wrong (order '$order', or item 5 lacks the code)"
 rm -f "$P/notes/release.txt"   # from here on the code is in no file
-ai "$W/todo2.txt" "${TODO_RUN[@]}" --continue -p "Session 2: do item 2 of your todo list only and mark it done. Leave items 3 to 5 pending and call finish (if you are reminded about open items, call finish again)."; tail -6 "$W/todo2.txt"; echo "(model: $(who "$W/todo2.txt"))"
-ai "$W/todo3.txt" "${TODO_RUN[@]}" --continue -p "Session 3, the last one: do the remaining items of your todo list and mark each done. For item 5, write the release code in your final answer exactly as your todo list gives it."; tail -10 "$W/todo3.txt"; echo "(model: $(who "$W/todo3.txt"))"
+ai "$W/todo2.txt" "${TODO_RUN[@]}" --continue -p "Session 2: do item 2 of your todo list only and mark it done. Leave items 3 to 5 pending and call finish (if you are reminded about open items, call finish again)."; tail -6 "$W/todo2.txt"; show "$W/todo2.txt"
+ai "$W/todo3.txt" "${TODO_RUN[@]}" --continue -p "Session 3, the last one: do the remaining items of your todo list and mark each done. For item 5, write the release code in your final answer exactly as your todo list gives it."; tail -10 "$W/todo3.txt"; show "$W/todo3.txt"
 cat "$W/todo2.txt" "$W/todo3.txt" | grep -q "(the earlier conversation was summarized to save room)" && ok "todo: the chat was shortened (summarized) in session 2 or 3" || bad "todo: the chat was never summarized"
+reads "$P"
 SESS="$(ls -t "$P/.syok/sessions/"*.json 2>/dev/null | head -1)"
 bun -e '
 const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")), code = process.argv[2], m = s.messages || [];
@@ -222,7 +232,7 @@ if [ -x "$LS" ]; then
   printf 'import { calcTotal, Cart } from "./pricing";\nexport function report(): string {\n  const all = calcTotal([4, 5]);\n  const count = new Cart().calcTotal();\n  return `total ${all}, items ${count}, again ${calcTotal([6])}`;\n}\n' > "$P/src/report.ts"
   printf '{ "lsp": { "typescript": { "command": "%s", "args": ["--stdio"] } } }\n' "$LS" > "$P/.syok/settings.json"
   ( cd "$P" && "$REPO/node_modules/.bin/tsc" -p . > "$W/rename-before.txt" 2>&1 ) && ok "rename: the project compiles before (checked with the real compiler)" || { bad "rename: the project does not compile before"; cat "$W/rename-before.txt"; }
-  ai "$W/rename.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Rename the function calcTotal that is defined on line 1 of src/pricing.ts to computeOrderTotal, everywhere it is used. Use the lsp tool's rename action for it (path src/pricing.ts, line 1, symbol calcTotal, new_name computeOrderTotal), not edit_file and not search and replace. The method calcTotal of the class Cart is a different thing and keeps its name. Then tell me which files changed."; tail -15 "$W/rename.txt"; echo "(model: $(who "$W/rename.txt"))"
+  ai "$W/rename.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "Rename the function calcTotal that is defined on line 1 of src/pricing.ts to computeOrderTotal, everywhere it is used. Use the lsp tool's rename action for it (path src/pricing.ts, line 1, symbol calcTotal, new_name computeOrderTotal), not edit_file and not search and replace. The method calcTotal of the class Cart is a different thing and keeps its name. Then tell me which files changed."; tail -15 "$W/rename.txt"; show "$W/rename.txt"; reads "$P"
   grep -q '> lsp {"action":"rename"' "$W/rename.txt" && ok "rename: the AI used lsp rename" || bad "rename: the AI did not use lsp rename"
   # The changes must come from the rename itself: no hand edits, and the rename's own reply (in the saved chat) applied all
   # 6 changes in the 3 files. Commands the AI ran afterwards to check its work (Syok Code asks it to run checks) are allowed,
@@ -243,9 +253,17 @@ echo "=== 14. peek_file with a real AI: the one error line in a 150 MB log"
 P="$W/peek"; mkdir -p "$P/logs"
 PCODE="$(python3 -I "$FIX" biglog "$P/logs/service.log" 150)"; echo "log size: $(wc -c < "$P/logs/service.log" | tr -d ' ') bytes"
 [ -n "$PCODE" ] && [ "$(grep -c "$PCODE" "$P/logs/service.log")" = 1 ] && ok "peek: the log was made with one planted error line" || bad "peek: the planted line is missing"
-ai "$W/peek.txt" --cwd "$P" --mode plan --model "$MODEL" -p "Payments stopped overnight. Our service log logs/service.log is about 150 MB, too big to read whole: look inside it with peek_file. Find the single ERROR line that explains why payments stopped and tell me its exact error code (the value after code=) and its line number."; tail -15 "$W/peek.txt"; echo "(model: $(who "$W/peek.txt"))"
+ai "$W/peek.txt" --cwd "$P" --mode plan --model "$MODEL" -p "Payments stopped overnight. Our service log logs/service.log is about 150 MB, too big to read whole: look inside it with peek_file. Find the single ERROR line that explains why payments stopped and tell me its exact error code (the value after code=) and its line number."; tail -15 "$W/peek.txt"; show "$W/peek.txt"
 grep -q '> peek_file' "$W/peek.txt" && ok "peek: the AI used peek_file" || bad "peek: the AI did not use peek_file"
-if grep -E '^> read_file ' "$W/peek.txt" | grep -q 'service.log'; then bad "peek: the AI tried read_file on the big log"; else ok "peek: read_file was not used on the big log"; fi
+# What must be proven is that the whole log never reaches the AI. read_file refuses files over 2 MB and points to peek_file,
+# so an attempt refused that way is the designed behaviour, not a failure. Checked in the saved chat: every read_file call on
+# the log must have got exactly that refusal and no line of the log; peek_file must have been used; the answer must hold the
+# exact code. A read_file that returned any log content fails.
+reads "$P" > "$W/peek-reads.txt"; cat "$W/peek-reads.txt"
+LOGREADS="$(grep -F 'service.log' "$W/peek-reads.txt")"
+if [ -z "$LOGREADS" ]; then ok "peek: read_file was not called on the big log"
+elif ! echo "$LOGREADS" | grep -vqF 'Error: file is larger than 2 MB. Use peek_file' && ! echo "$LOGREADS" | grep -qE '20[0-9]{2}-[0-9]{2}-[0-9]{2}T|INFO|WARN|ERROR'; then ok "peek: every read_file on the big log ($(echo "$LOGREADS" | wc -l | tr -d ' ') call(s)) was refused with the pointer to peek_file; no log content reached the AI"
+else bad "peek: a read_file on the big log was not refused, or returned log content"; fi
 grep -q "$PCODE" "$W/peek.txt" && ok "peek: the answer has the exact code $PCODE (random, only in the log)" || bad "peek: the answer lacks the code $PCODE"
 rm -rf "$P"
 
@@ -257,12 +275,22 @@ echo "models this key lists: ${MODELS:-(none)}"
 VM="${VISION_MODEL:-}"
 if [ -z "$VM" ]; then for pat in '^claude-(sonnet|opus)' '^claude' '^gpt-4o' '^gpt-4\.1' '^gpt-5' '^gemini' '^pixtral' '^grok-.*vision' '^grok-4' 'llama-4' 'qwen.*vl'; do
   VM="$(printf '%s\n' $MODELS | grep -Ei "$pat" | grep -Eiv 'embed|audio|tts|whisper|image-gen|dall' | head -1)"; [ -n "$VM" ] && break; done; fi
-if [ -z "$VM" ]; then echo "SKIP view_image: no model that can see images is listed for this key (it lists: ${MODELS:-nothing}; presets such as syok-coder may route to models that cannot see pictures), so this cannot be checked here"; else
+# The list may hold presets only. Ask the router once, cheaply, whether it takes a specific model name: one tiny request per
+# name, accepted only when it answers 200 AND says (X-Syok-Model) that this very model answered. A preset answering instead
+# does not count: then the picture could go to a model that cannot see.
+if [ -z "$VM" ]; then CHAT="$(echo "$SYOK_BASE_URL" | sed -E 's#/+$##; s#/v1$##')/v1/chat/completions"
+  for cand in claude-sonnet-5 gpt-4o gemini-2.5-flash; do
+    st="$(curl -s -m 60 -o "$W/probe.json" -D "$W/probe.h" -w '%{http_code}' -H "authorization: Bearer $SYOK_API_KEY" -H 'content-type: application/json' -d "{\"model\":\"$cand\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with the single word OK.\"}],\"max_tokens\":5}" "$CHAT")"
+    pm="$(grep -i '^x-syok-model:' "$W/probe.h" | tail -1 | cut -d' ' -f2- | tr -d '\r')"; pp="$(grep -i '^x-syok-provider:' "$W/probe.h" | tail -1 | cut -d' ' -f2- | tr -d '\r')"
+    echo "probe --model $cand: HTTP $st, answered by ${pp:-?} / ${pm:-?}$( [ "$st" = 200 ] || echo "; said: $(head -c 200 "$W/probe.json" | tr '\n' ' ')")"
+    if [ "$st" = 200 ] && [ "$(echo "$pm" | tr 'A-Z' 'a-z')" = "$cand" ]; then VM="$cand"; echo "the router takes the specific model name $cand"; break; fi
+  done; fi
+if [ -z "$VM" ]; then echo "SKIP view_image: no model that can see images can be pinned for this key (it lists: ${MODELS:-nothing}, and the router did not answer a specific model name with that model, see the probes above; presets such as syok-coder may route to models that cannot see pictures), so this cannot be checked here"; else
   echo "view_image model (pinned): $VM"
   P="$W/image"; mkdir -p "$P"
   read -r INUM ICOL < <(python3 -I "$FIX" png "$P/shot.png")
   [ -s "$P/shot.png" ] && [ -n "$INUM" ] && ok "image: the picture was made" || bad "image: the picture was not made"
-  ai "$W/image.txt" --cwd "$P" --mode plan --model "$VM" -p "Look at the picture shot.png in this project with view_image. Which number is written in it, and what colour is the bar along its top edge (red, green or blue)? Answer in one line."; tail -8 "$W/image.txt"; echo "(model: $(who "$W/image.txt"))"
+  ai "$W/image.txt" --cwd "$P" --mode plan --model "$VM" -p "Look at the picture shot.png in this project with view_image. Which number is written in it, and what colour is the bar along its top edge (red, green or blue)? Answer in one line."; tail -8 "$W/image.txt"; show "$W/image.txt"; reads "$P"
   grep -q '> view_image' "$W/image.txt" && ok "image: the AI used view_image" || bad "image: the AI did not use view_image"
   has_number "$INUM" "$W/image.txt" && ok "image: the answer has the number $INUM (random, only in the picture)" || bad "image: the answer lacks the number $INUM"
   # the right colour named, and neither of the two other colours (so a list of all three cannot pass)
@@ -286,7 +314,7 @@ with open(".wizard-result", "w") as f:
     f.write("%s|%s|%s\n" % (name, build, code))
 print("REGISTRATION " + code)
 PY
-  ai "$W/pty.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "This project has a setup wizard, wizard.py, that asks two questions and only works in an interactive terminal. Run python3 wizard.py with pty_start, answer its questions with pty_send (owner name: Mira Tan, build number: 4096), read its output with pty_read, then stop the terminal with pty_stop. Tell me the exact REGISTRATION line it printed."; tail -12 "$W/pty.txt"; echo "(model: $(who "$W/pty.txt"))"
+  ai "$W/pty.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "This project has a setup wizard, wizard.py, that asks two questions and only works in an interactive terminal. Run python3 wizard.py with pty_start, answer its questions with pty_send (owner name: Mira Tan, build number: 4096), read its output with pty_read, then stop the terminal with pty_stop. Then reply with the exact REGISTRATION line copied from the terminal."; tail -12 "$W/pty.txt"; show "$W/pty.txt"; reads "$P"
   grep -q '> pty_start' "$W/pty.txt" && grep -q '> pty_send' "$W/pty.txt" && ok "pty: the AI used pty_start and pty_send" || bad "pty: the AI did not use pty_start and pty_send"
   grep -q '> pty_read' "$W/pty.txt" && ok "pty: the AI read the terminal with pty_read" || bad "pty: the AI did not use pty_read"
   RES="$(cat "$P/.wizard-result" 2>/dev/null)"; RCODE="${RES##*|}"
