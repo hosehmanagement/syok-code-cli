@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { officialImage, normalize, readDataset, select, predictionLine, promptFor, type Instance } from "../bench/swebench/dataset.ts";
 import { grade, parsePytest, parseDjango, parseSympy, testSection } from "../bench/swebench/grade.ts";
 import { dockerBackend, modalBackend, MERGE, type Backend, type Sandbox } from "../bench/swebench/backends.ts";
-import { solveInstance, quickGrade, instanceCost, outcomeOf, resultsTable } from "../bench/swebench/run.ts";
+import { solveInstance, quickGrade, instanceCost, outcomeOf, resultsTable, diffCommand, imageChangesCommand } from "../bench/swebench/run.ts";
 import type { Adapter } from "../bench/adapters/types.ts";
 import { syok } from "../bench/adapters/syok.ts";
 import { scrub } from "../bench/swebench/scrub.ts";
@@ -198,6 +198,38 @@ test("an image that already changed a tracked file (like the sphinx images' tox.
   expect(ed.patch).not.toContain("+# setup edit"); // the image's own edit is in both snapshots, so not in the patch
   expect(ed.patch).toContain("diff --git a/added.py b/added.py");
   expect(ed.patch).not.toContain("junk.py");
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+test("Syok Code's own .syok/ folder (saved chats) never reaches the patch or predictions.jsonl; the code change does", async () => {
+  const { be, dirs } = localBackend();
+  const probe = await be.start("x", { timeoutSec: 10 }); const base = head(probe.id);
+  expect(syok.patchExclude).toEqual([".syok/"]);
+  const tool: Adapter = { ...syok, containerInstall: [], command: () => ({ cmd: ["sh", "-c", "mkdir -p .syok/sessions && echo '{\"messages\":[\"the whole chat\"]}' > .syok/sessions/20261123-abcd.json && printf 'v = 2\\n' > app.py && echo '{\"stopped\":\"finished\",\"usage\":{\"input\":1,\"output\":1,\"total\":2}}'"], enforced: [] }) };
+  const x: Instance = normalize(row({ base_commit: base }));
+  const { patch, report } = await solveInstance(x, { backend: be, tool: "syok", adapter: tool, model: "syok-coder", timeoutSec: 60, doGrade: false, skipInstall: true, logDir: tmpDir("sb-logs-") });
+  expect(report.error).toBeUndefined();
+  expect(patch).toContain("diff --git a/app.py b/app.py"); expect(patch).toContain("+v = 2");
+  expect(patch).not.toContain(".syok"); expect(patch).not.toContain("the whole chat");
+  const line = predictionLine(x.instance_id, "syok__syok-coder", patch);
+  expect(line).not.toContain(".syok"); expect(JSON.parse(line).model_patch).toBe(patch);
+  // Without the exclude list the same run would have carried the chat file: the exclusion is what keeps it out.
+  const plain = await solveInstance(x, { backend: be, tool: "syok", adapter: { ...tool, patchExclude: undefined }, model: "syok-coder", timeoutSec: 60, doGrade: false, skipInstall: true, logDir: tmpDir("sb-logs-") });
+  expect(plain.patch).toContain("diff --git a/.syok/sessions/20261123-abcd.json");
+  expect(() => diffCommand(["../x"])).toThrow(/not allowed/); expect(() => diffCommand(["a'; rm -rf /"])).toThrow(/not allowed/);
+  expect(diffCommand([".syok/"])).toContain("-- . ':(exclude).syok'");
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+test("imageChangedFiles counts what differs from the dataset's BASE commit, even when the image's HEAD is a later commit", async () => {
+  const { be: inner, dirs } = localBackend();
+  const probe = await inner.start("x", { timeoutSec: 10 }); const base = head(probe.id);
+  // The image's setup committed an edit on top of the base commit (HEAD != base): a HEAD-based count would say 0.
+  const be: Backend = { ...inner, async start(i, o) { const b = await inner.start(i, o); writeFileSync(join(b.id, "app.py"), "v = 1\n# setup\n"); spawnSync("git", ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qam", "setup"], { cwd: b.id }); return b; } };
+  const x: Instance = normalize(row({ base_commit: base }));
+  const r = await solveInstance(x, { backend: be, tool: "noop", model: "noop", timeoutSec: 60, doGrade: false, logDir: tmpDir("sb-logs-") });
+  expect(r.report.headMatchesBase).toBe(false);
+  expect(r.report.imageChangedFiles).toBe(1);
+  expect(r.patch).toBe("");
+  expect(imageChangesCommand("not a sha; rm -rf /")).toBe("git diff --name-only HEAD 2>/dev/null | wc -l");
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
 test("scrub: every secret value is replaced byte for byte in every file, nothing is left, short or empty values are ignored", () => {

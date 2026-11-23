@@ -33,6 +33,9 @@ export const syok: Adapter = {
       "After each run the bench reads which provider/model answered from the --json usage and marks the run if any other model answered.",
   ],
   authEnv: ["SYOK_BASE_URL", "SYOK_API_KEY"],
+  // Syok Code saves each chat in <project>/.syok/sessions/ (found in every prediction of run 45154374333). That is the
+  // tool's own record, not part of the fix, so it never goes into a SWE-bench patch.
+  patchExclude: [".syok/"],
   // Inside a SWE-bench container: this repository's own one-line installer (install/install.sh) is copied in and run.
   // It installs the PUBLISHED Syok Code. To test this checkout instead, build the one-file program
   // (bun build src/main.ts --target=bun --minify --outfile syok.js) and set SYOK_BENCH_BUNDLE to its path: it then replaces the

@@ -50,6 +50,9 @@ export interface Adapter {
   containerUpload?: Array<{ local: string; remote: string }>;
   /** Like `unverified`, for the container install lines only (printed by the SWE-bench runner). */
   containerUnverified?: string[];
+  /** The tool's own bookkeeping folders in the project (saved chats, caches), relative to the project root. They are left
+   *  out of SWE-bench patches, so predictions hold only code changes. */
+  patchExclude?: string[];
   /** Names of environment variables that carry this tool's login, passed into containers by name only. */
   authEnv?: string[];
 }
