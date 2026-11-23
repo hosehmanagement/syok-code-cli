@@ -1,0 +1,12 @@
+# The SWE-bench Verified pilot instances, fixed BEFORE any run (committed 23 Nov 2026, before the first gold, noop or Syok run).
+# Chosen by the runner's own fixed-seed choice, not by hand:
+#   bun bench/swebench/run.ts --dataset verified.jsonl --n 5 --seed 42 ...
+# on SWE-bench/SWE-bench_Verified, split test (500 rows; parquet file sha256
+# 030cfd7f2a704c4c0226e7f104c725a3b41230b1d3517f9c915ad7ea5be3fa25 as downloaded on 23 Nov 2026).
+# An instance is left out of the AI run only when the gold check (the dataset's own fix) does not grade RESOLVED;
+# the reason is written in the pilot report. Nothing is left out after seeing an AI result.
+sphinx-doc__sphinx-7757
+django__django-14765
+sympy__sympy-14531
+scikit-learn__scikit-learn-13124
+pytest-dev__pytest-10081

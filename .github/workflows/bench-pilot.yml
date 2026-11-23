@@ -1,0 +1,209 @@
+name: bench pilot (SWE-bench Verified)
+# A small, honest SWE-bench Verified pilot, run here on GitHub (never on your own computer).
+# Each instance runs in its own official SWE-bench container (Docker on this Ubuntu machine), the tool's changes become
+# predictions.jsonl, the quick local grade checks them, and then the OFFICIAL SWE-bench harness (pip package swebench) grades
+# the same predictions. Both results are shown; only the official harness is a real score, and 5 instances are a pilot only.
+# Tools: gold (the dataset's own fix, no AI), noop (no change, no AI), syok (Syok Code through your Syok key: real money on
+# your provider keys). Several tools: comma list, for example "gold,noop".
+# Instances: the ids you give, else the first n of a fixed seed (42), so nobody picks instances after seeing results.
+# The pre-registered pilot list is bench/swebench/pilot-ids.txt.
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "How many instances (fixed seed 42) when no ids are given"
+        default: "5"
+      ids:
+        description: "Instance ids, comma separated (optional; overrides n)"
+        default: ""
+      tool:
+        description: "gold, noop, syok (comma list allowed)"
+        default: "syok"
+      model:
+        description: "Model name passed to the tool (Syok: syok-coder by default; see bench/README.md on pinning)"
+        default: ""
+      max_spend_usd:
+        description: "Money cap in US dollars for the AI run"
+        default: "5"
+      cost_per_instance_usd:
+        description: "Worst-case planning figure per instance (the run is refused when n x this is above the cap)"
+        default: "1"
+      max_steps:
+        description: "Steps the tool may take per instance"
+        default: "40"
+      timeout_sec:
+        description: "Time limit per instance (tool run and test run, each)"
+        default: "1200"
+      official:
+        description: "Also grade with the official SWE-bench harness (true/false)"
+        default: "true"
+permissions:
+  contents: read
+concurrency:
+  group: bench-pilot
+  cancel-in-progress: false
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      SYOK_BASE_URL: ${{ secrets.SYOK_BASE_URL }}
+      SYOK_API_KEY: ${{ secrets.SYOK_API_KEY }}
+      SWEBENCH_VERSION: "5.0.2"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hide the Syok address in the logs
+        # GitHub hides the exact secret only; the address is also printed as a bare host. Same rule as the other live workflows.
+        env:
+          U: ${{ secrets.SYOK_BASE_URL }}
+        shell: bash
+        run: |
+          h="${U#*://}"; h="${h%%/*}"
+          for v in "$h" "${U%/}" "${U%/v1}" "${U%/v1/}"; do [ -n "$v" ] && echo "::add-mask::$v"; done
+          a="${h#syok-ai-router-personal-}"; a="${a%%.*}"; [ -n "$a" ] && [ "$a" != "$h" ] && echo "::add-mask::$a"
+          exit 0
+      - name: Check the inputs
+        env:
+          IN_TOOL: ${{ inputs.tool }}
+          IN_N: ${{ inputs.n }}
+          IN_IDS: ${{ inputs.ids }}
+          IN_MODEL: ${{ inputs.model }}
+          IN_CAP: ${{ inputs.max_spend_usd }}
+          IN_PER: ${{ inputs.cost_per_instance_usd }}
+          IN_STEPS: ${{ inputs.max_steps }}
+          IN_TIMEOUT: ${{ inputs.timeout_sec }}
+        shell: bash
+        run: |
+          set -eu
+          echo "$IN_TOOL" | grep -Eq '^(gold|noop|syok)(,(gold|noop|syok))*$' || { echo "tool must be gold, noop or syok (comma list allowed)"; exit 1; }
+          echo "$IN_IDS" | grep -Eq '^[A-Za-z0-9_.,-]*$' || { echo "ids: letters, digits, _ . - and commas only"; exit 1; }
+          echo "$IN_MODEL" | grep -Eq '^[A-Za-z0-9_./:-]*$' || { echo "model: letters, digits, _ . / : - only"; exit 1; }
+          for v in "$IN_N" "$IN_STEPS" "$IN_TIMEOUT"; do echo "$v" | grep -Eq '^[0-9]+$' || { echo "n, max_steps and timeout_sec must be whole numbers"; exit 1; }; done
+          for v in "$IN_CAP" "$IN_PER"; do echo "$v" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || { echo "money inputs must be numbers"; exit 1; }; done
+          if echo "$IN_TOOL" | grep -q syok && { [ -z "$SYOK_BASE_URL" ] || [ -z "$SYOK_API_KEY" ]; }; then echo "the Syok secrets are not set"; exit 1; fi
+          echo "Inputs OK."
+      - name: Free disk space for the SWE-bench images (each is 1-1.5 GB compressed)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          docker system prune -af >/dev/null || true
+          df -h / | tail -1
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the official SWE-bench harness and get the dataset
+        shell: bash
+        run: |
+          set -eu
+          pip install --quiet "swebench==$SWEBENCH_VERSION" datasets
+          mkdir -p "$RUNNER_TEMP/ds"
+          python -c "import datasets; datasets.load_dataset('SWE-bench/SWE-bench_Verified', split='test').to_json('$RUNNER_TEMP/ds/verified.jsonl')"
+          wc -l "$RUNNER_TEMP/ds/verified.jsonl"; sha256sum "$RUNNER_TEMP/ds/verified.jsonl"
+      - name: Build Syok Code from this commit (the containers get this build, not the published one)
+        if: contains(inputs.tool, 'syok')
+        run: |
+          bun build src/main.ts --target=bun --minify --outfile "$RUNNER_TEMP/syok.js"
+          echo "SYOK_BENCH_BUNDLE=$RUNNER_TEMP/syok.js" >> "$GITHUB_ENV"
+          echo "Syok Code build from commit $GITHUB_SHA"
+      - name: Run the pilot
+        env:
+          IN_TOOL: ${{ inputs.tool }}
+          IN_N: ${{ inputs.n }}
+          IN_IDS: ${{ inputs.ids }}
+          IN_MODEL: ${{ inputs.model }}
+          IN_CAP: ${{ inputs.max_spend_usd }}
+          IN_PER: ${{ inputs.cost_per_instance_usd }}
+          IN_STEPS: ${{ inputs.max_steps }}
+          IN_TIMEOUT: ${{ inputs.timeout_sec }}
+        shell: bash
+        run: |
+          set -u
+          OUT="$RUNNER_TEMP/pilot"; mkdir -p "$OUT"
+          if [ -n "$IN_IDS" ]; then SEL="--ids $IN_IDS"; else SEL="--n $IN_N --seed 42"; fi
+          status=0
+          for t in $(echo "$IN_TOOL" | tr ',' ' '); do
+            echo "::group::$t"
+            extra=""
+            if [ "$t" = syok ]; then extra="--model ${IN_MODEL:-syok-coder} --max-steps $IN_STEPS --cost-per-instance $IN_PER"; fi
+            # shellcheck disable=SC2086
+            bun bench/swebench/run.ts --dataset "$RUNNER_TEMP/ds/verified.jsonl" $SEL --tool "$t" $extra --grade \
+              --max-spend "$IN_CAP" --timeout "$IN_TIMEOUT" --out "$OUT" || status=$?
+            echo "::endgroup::"
+          done
+          echo "SELECTION=$SEL" >> "$GITHUB_ENV"
+          exit $status
+      - name: Grade with the official SWE-bench harness
+        if: always() && inputs.official == 'true'
+        env:
+          IN_TIMEOUT: ${{ inputs.timeout_sec }}
+        shell: bash
+        run: |
+          set -u
+          echo "$IN_TIMEOUT" | grep -Eq '^[0-9]+$' || exit 1
+          cd "$RUNNER_TEMP/pilot" || exit 0
+          for d in */; do
+            d="${d%/}"; p="$d/predictions.jsonl"; [ -s "$p" ] || continue
+            ids=$(python -c "import json,sys; print(' '.join('-i '+json.loads(l)['instance_id'] for l in open(sys.argv[1]) if l.strip()))" "$p")
+            echo "::group::official harness: $d"
+            # shellcheck disable=SC2086
+            (cd "$d" && swebench eval verified -p predictions.jsonl --run-id "pilot-$d" -j 2 -t "$IN_TIMEOUT" $ids) > "$d/official.txt" 2>&1 || echo "the official harness exited with an error (see official.txt)"
+            tail -n 20 "$d/official.txt"
+            echo "::endgroup::"
+          done
+      - name: Write the summary table
+        if: always()
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/pilot" 2>/dev/null || { echo "No results." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          {
+            echo "## SWE-bench Verified pilot"
+            echo "Commit: \`$GITHUB_SHA\`. Instances: \`${SELECTION:-?}\`. Harness: swebench $SWEBENCH_VERSION."
+            echo
+            for d in */; do
+              d="${d%/}"
+              [ -f "$d/results.md" ] && cat "$d/results.md"
+              rep=$(ls "$d"/*."pilot-$d".json 2>/dev/null | head -n 1)
+              if [ -n "$rep" ]; then
+                python - "$rep" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          print(f"\n**Official SWE-bench harness: {r.get('resolved_instances')}/{r.get('submitted_instances')} resolved** "
+                f"(completed {r.get('completed_instances')}, empty patch {r.get('empty_patch_instances')}, errors {r.get('error_instances')}).")
+          print(f"Resolved: {', '.join(r.get('resolved_ids') or []) or 'none'}. Unresolved: {', '.join(r.get('unresolved_ids') or []) or 'none'}. "
+                f"Empty patch: {', '.join(r.get('empty_patch_ids') or []) or 'none'}. Errors: {', '.join(r.get('error_ids') or []) or 'none'}.\n")
+          PY
+              elif [ -f "$d/official.txt" ]; then echo; echo "Official harness: no report file (see official.txt in the artifact)."; echo; fi
+            done
+          } | tee results-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the Syok address and key from the files before upload
+        if: always()
+        env:
+          U: ${{ secrets.SYOK_BASE_URL }}
+          K: ${{ secrets.SYOK_API_KEY }}
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/pilot" 2>/dev/null || exit 0
+          h="${U#*://}"; h="${h%%/*}"
+          for v in "$K" "$h"; do
+            [ -n "$v" ] || continue
+            grep -rlF -- "$v" . 2>/dev/null | while read -r f; do V="$v" python -c "import os,sys; p=sys.argv[1]; s=open(p,encoding='utf-8',errors='surrogateescape').read(); open(p,'w',encoding='utf-8',errors='surrogateescape').write(s.replace(os.environ['V'],'<hidden>'))" "$f"; done
+          done
+          if [ -n "$h" ] && grep -rqF -- "$h" .; then echo "the address is still in a file; not uploading"; rm -rf ./*; fi
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-pilot-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/pilot/**/predictions.jsonl
+            ${{ runner.temp }}/pilot/**/results.json
+            ${{ runner.temp }}/pilot/**/results.md
+            ${{ runner.temp }}/pilot/**/official.txt
+            ${{ runner.temp }}/pilot/**/*.pilot-*.json
+            ${{ runner.temp }}/pilot/**/logs/**
+            ${{ runner.temp }}/pilot/results-summary.md
+          if-no-files-found: warn
+          retention-days: 30
