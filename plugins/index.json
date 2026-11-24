@@ -1,0 +1,289 @@
+{
+ "updated": "2026-11-24",
+ "plugins": [
+  {
+   "name": "bug-hunter",
+   "title": "Bug hunter",
+   "description": "Runs your tests, finds the real cause of each failure and fixes the code, not the test. Says so when the test itself is wrong.",
+   "version": "1.0.0",
+   "sha256": "6a7bea23d54c21e64f4f621e1a68bb15342f103b29a7e6d449ae0c6a060b58f4",
+   "bytes": 2455,
+   "tags": [
+    "bug",
+    "fix",
+    "failing",
+    "tests",
+    "debug",
+    "error",
+    "broken"
+   ],
+   "try": "/fix-failing",
+   "fits": [
+    {
+     "file": "package.json",
+     "because": "it can run this project's tests"
+    },
+    {
+     "file": "pyproject.toml",
+     "because": "it can run this project's tests"
+    },
+    {
+     "file": "pytest.ini",
+     "because": "it can run this project's tests"
+    },
+    {
+     "file": "go.mod",
+     "because": "it can run this project's tests"
+    },
+    {
+     "file": "Cargo.toml",
+     "because": "it can run this project's tests"
+    }
+   ],
+   "commands": [
+    "fix-failing"
+   ],
+   "skills": [],
+   "runsCommands": false
+  },
+  {
+   "name": "ci-starter",
+   "title": "CI starter",
+   "description": "Writes a ready GitHub checks file that runs your project's real test command on every push and pull request. You put it in place with one command.",
+   "version": "1.0.0",
+   "sha256": "2d7dba46edc9fa600ea36380b8314ad21873cc893dadfa805f47f606f01672dc",
+   "bytes": 2906,
+   "tags": [
+    "ci",
+    "github",
+    "actions",
+    "workflow",
+    "automation",
+    "checks",
+    "pipeline"
+   ],
+   "try": "/ci",
+   "fits": [
+    {
+     "missing": ".github/workflows",
+     "because": "this project has no automatic checks on GitHub yet"
+    },
+    {
+     "file": ".git",
+     "because": "this project uses git"
+    }
+   ],
+   "commands": [
+    "ci"
+   ],
+   "skills": [],
+   "runsCommands": false
+  },
+  {
+   "name": "docs-writer",
+   "title": "Docs writer",
+   "description": "Writes a README from what the project really does, with commands it has checked, and explains any file in plain words.",
+   "version": "1.0.0",
+   "sha256": "41a3e92ae7a784fbe823677346ca97a2318f51ec1726eeb310f5973c809ca151",
+   "bytes": 3340,
+   "tags": [
+    "docs",
+    "readme",
+    "documentation",
+    "explain",
+    "comments",
+    "onboarding"
+   ],
+   "try": "/readme",
+   "fits": [
+    {
+     "missing": "README.md",
+     "because": "this project has no README yet"
+    },
+    {
+     "file": "package.json",
+     "because": "it can read the real commands from package.json"
+    },
+    {
+     "file": "pyproject.toml",
+     "because": "it can read the real commands from pyproject.toml"
+    }
+   ],
+   "commands": [
+    "explain-file",
+    "readme"
+   ],
+   "skills": [],
+   "runsCommands": false
+  },
+  {
+   "name": "git-helper",
+   "title": "Git helper",
+   "description": "Commit with a clear message written from your real changes, and keep a changelog, without typing git commands.",
+   "version": "1.0.0",
+   "sha256": "ebaaa0878911f1e3d5cbe4d6ee6b0bd2fdcf25c1e5db473558cff9dfd2b44b69",
+   "bytes": 3450,
+   "tags": [
+    "git",
+    "commit",
+    "changelog",
+    "history",
+    "message"
+   ],
+   "try": "/commit",
+   "fits": [
+    {
+     "file": ".git",
+     "because": "this project uses git"
+    }
+   ],
+   "commands": [
+    "changelog",
+    "commit"
+   ],
+   "skills": [],
+   "runsCommands": false
+  },
+  {
+   "name": "refactor-safe",
+   "title": "Safe refactor",
+   "description": "Renames a function, class or variable everywhere it is really used, and nowhere else, then runs the tests to prove nothing broke.",
+   "version": "1.0.0",
+   "sha256": "2400dd7bc9d2241abb24aa9928380bad43df12636a52c7941ddb0fdb54070b68",
+   "bytes": 3174,
+   "tags": [
+    "refactor",
+    "rename",
+    "cleanup",
+    "restructure",
+    "symbol"
+   ],
+   "try": "/rename oldName newName",
+   "fits": [
+    {
+     "lang": "typescript",
+     "because": "this project is written in TypeScript or JavaScript"
+    },
+    {
+     "lang": "python",
+     "because": "this project is written in Python"
+    },
+    {
+     "lang": "go",
+     "because": "this project is written in Go"
+    },
+    {
+     "lang": "rust",
+     "because": "this project is written in Rust"
+    }
+   ],
+   "commands": [
+    "rename"
+   ],
+   "skills": [],
+   "runsCommands": false
+  },
+  {
+   "name": "reviewer",
+   "title": "Change reviewer",
+   "description": "Reviews the changes you have not committed yet: real bugs first, then security, then missing tests. Reads only; changes nothing.",
+   "version": "1.0.0",
+   "sha256": "8c96be282bbbe8badeaae3c01c2406eeb800d7f0cb5258ba629d829e877edd67",
+   "bytes": 2528,
+   "tags": [
+    "review",
+    "bugs",
+    "quality",
+    "diff",
+    "check",
+    "security"
+   ],
+   "try": "/review-changes",
+   "fits": [
+    {
+     "file": ".git",
+     "because": "this project uses git, so your uncommitted changes can be reviewed"
+    }
+   ],
+   "commands": [
+    "review-changes"
+   ],
+   "skills": [],
+   "runsCommands": false
+  },
+  {
+   "name": "security-check",
+   "title": "Security check",
+   "description": "Looks through the project for keys, passwords and tokens left in its files and reports where each one is, without ever printing a secret.",
+   "version": "1.0.0",
+   "sha256": "38c9ffc4e2bc96ed3601b20b53b8a8bc341da95e1419804a096ddf81e92b2a0b",
+   "bytes": 2950,
+   "tags": [
+    "security",
+    "secrets",
+    "keys",
+    "passwords",
+    "leak",
+    "audit",
+    "safety"
+   ],
+   "try": "/secrets-scan",
+   "fits": [
+    {
+     "file": ".git",
+     "because": "anything committed to git stays in its history, so leaked keys are worth finding early"
+    },
+    {
+     "file": ".env",
+     "because": "this project has a .env file, which often holds keys"
+    }
+   ],
+   "commands": [
+    "secrets-scan"
+   ],
+   "skills": [],
+   "runsCommands": false
+  },
+  {
+   "name": "test-writer",
+   "title": "Test writer",
+   "description": "Writes tests for a file the way your project already writes them, runs them, and never changes the code under test to make them pass.",
+   "version": "1.0.0",
+   "sha256": "9d049ab56edd6d7aeb7a54852d2dbd87d09eec1083957b0796fa349c35903e46",
+   "bytes": 2596,
+   "tags": [
+    "test",
+    "tests",
+    "testing",
+    "unit",
+    "coverage",
+    "pytest",
+    "jest"
+   ],
+   "try": "/tests src/yourfile",
+   "fits": [
+    {
+     "file": "package.json",
+     "because": "this is a JavaScript or TypeScript project"
+    },
+    {
+     "file": "pyproject.toml",
+     "because": "this is a Python project"
+    },
+    {
+     "file": "go.mod",
+     "because": "this is a Go project"
+    },
+    {
+     "file": "Cargo.toml",
+     "because": "this is a Rust project"
+    }
+   ],
+   "commands": [
+    "tests"
+   ],
+   "skills": [],
+   "runsCommands": false
+  }
+ ]
+}
