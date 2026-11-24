@@ -2,7 +2,7 @@
 // It never prints the key: only whether one is set, how long it is, and whether it has the usual start.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { chatUrl } from "./agent.ts";
+import { chatUrl, shapeBody } from "./agent.ts";
 import { hasProgram } from "./checks.ts";
 import { SITE, sha256 } from "./update.ts";
 
@@ -88,7 +88,7 @@ export async function doctor(o: DoctorOpts): Promise<{ ok: boolean; lines: Line[
     }
     if (reached) {
       const model = o.model || "syok-coder";
-      const c = await timedRetry(f, chatUrl(o.base), { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: "Reply with the single word OK." }], max_tokens: 16, temperature: 0 }) }, Math.max(ms, 60000), sleep);
+      const c = await timedRetry(f, chatUrl(o.base), { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify(shapeBody(o.base, { model, messages: [{ role: "user", content: "Reply with the single word OK." }], max_tokens: 16, temperature: 0 })) }, Math.max(ms, 60000), sleep);
       if (c.err) add("fail", "AI answer", c.err, "Syok was reached but no AI answered. Check in Syok that at least one provider key is working.");
       else if (BUSY.has(c.res!.status)) { const t = await reason(c.res!); add("fail", "AI answer", `Syok answered "busy" (error ${c.res!.status}${t ? ": " + t : ""}), also when asked again a few seconds later`, BUSY_FIX); }
       else if (!c.res!.ok) { let t = ""; try { t = (await c.res!.text()).replace(/\s+/g, " ").slice(0, 200); } catch {} add("fail", "AI answer", `error ${c.res!.status}${t ? ": " + t : ""}`, "Open Syok and check your provider keys and their limits."); }

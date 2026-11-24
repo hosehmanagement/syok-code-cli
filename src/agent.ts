@@ -122,12 +122,13 @@ const PARALLEL_WORKER = ` You are working in your own separate copy of the proje
 const WORKER = `You are a focused helper for Syok Code. Do only the sub-task you were given, with the smallest change, then run the relevant check and call finish with the files you changed and the result.`;
 async function readSSE(body: ReadableStream<Uint8Array>, on: (s: string) => void) {
   const rd = body.getReader(), dec = new TextDecoder();
-  let buf = "", content = "", usage: any, streamed = false; const calls: any[] = [];
+  let buf = "", content = "", usage: any, streamed = false, model = ""; const calls: any[] = [];
   const handle = (line: string) => {
     if (!line.startsWith("data:")) return;
     const d = line.slice(5).trim(); if (!d || d === "[DONE]") return;
     let j: any; try { j = JSON.parse(d); } catch { return; }
     if (j.usage) usage = j.usage;
+    if (typeof j.model === "string" && j.model && !model) model = j.model;
     const dl = j.choices?.[0]?.delta; if (!dl) return;
     if (typeof dl.content === "string" && dl.content) { content += dl.content; streamed = true; on(dl.content); }
     for (const t of dl.tool_calls || []) {
@@ -143,7 +144,7 @@ async function readSSE(body: ReadableStream<Uint8Array>, on: (s: string) => void
   }
   if (buf.trim()) handle(buf.trim());
   const tc = calls.filter(Boolean).map((c, i) => ({ ...c, id: c.id || "call_" + i }));
-  return { choices: [{ message: { role: "assistant", content, ...(tc.length ? { tool_calls: tc } : {}) } }], usage, __streamed: streamed } as any;
+  return { choices: [{ message: { role: "assistant", content, ...(tc.length ? { tool_calls: tc } : {}) } }], usage, __streamed: streamed, __model: model } as any;
 }
 /** Shrinks a long HTML error page (for example Cloudflare's) to its title and error code so messages stay readable. */
 export const briefBody = (raw: string): string => {
@@ -154,6 +155,27 @@ export const briefBody = (raw: string): string => {
   return ("[web page] " + (title || text.slice(0, 120)) + (code ? " (error code " + code + ")" : "") + " | " + text.slice(0, 160)).slice(0, 300);
 };
 
+/** True when the address is Anthropic's own API (https://api.anthropic.com), used directly with your own Anthropic key instead of a Syok router. */
+export function isAnthropicHost(base: string): boolean { try { return new URL(base.trim()).hostname.toLowerCase().replace(/\.$/, "") === "api.anthropic.com"; } catch { return false; } }
+/** Leave "temperature" out of requests: Anthropic answers HTTP 400 for any temperature below 1 on newer Claude models (the Syok router removes it for Claude itself). Off for every other address unless SYOK_NO_TEMPERATURE=1. */
+export function omitTemperature(base: string, env: Record<string, string | undefined> = process.env): boolean { return env.SYOK_NO_TEMPERATURE === "1" || isAnthropicHost(base); }
+/** SYOK_MAX_TOKENS: a positive whole number sent as max_tokens. Unset or not a positive whole number: nothing is sent. */
+export function maxTokensFromEnv(env: Record<string, string | undefined> = process.env): number | undefined { const v = String(env.SYOK_MAX_TOKENS ?? "").trim(); if (!/^\d+$/.test(v)) return undefined; const n = Number(v); return n > 0 && Number.isSafeInteger(n) ? n : undefined; }
+/** The request body as it is sent to this address: without temperature where it must not be sent, with max_tokens when SYOK_MAX_TOKENS is set. */
+export function shapeBody(base: string, body: any, env: Record<string, string | undefined> = process.env): any {
+  const out = { ...body };
+  if (omitTemperature(base, env)) delete out.temperature;
+  const mt = maxTokensFromEnv(env); if (mt !== undefined && out.max_tokens === undefined) out.max_tokens = mt;
+  return out;
+}
+/** Which provider answered. A Syok router says so in its X-Syok-* reply headers; without them (your own key used directly), the provider comes from the address ("anthropic" for api.anthropic.com, otherwise "direct") and the model from the answer itself. */
+export function routeOf(base: string, h: Headers, bodyModel?: unknown): Route {
+  const route = { provider: h.get("x-syok-provider") || "", model: h.get("x-syok-model") || "", attempts: h.get("x-syok-attempts") || "", details: h.get("x-syok-attempt-details") || "" };
+  if (route.provider || route.model) return route;
+  const m = typeof bodyModel === "string" ? bodyModel.trim().slice(0, 200) : "";
+  if (m || isAnthropicHost(base)) { route.provider = isAnthropicHost(base) ? "anthropic" : "direct"; route.model = m; }
+  return route;
+}
 /** Your Syok address, with or without a trailing slash or /v1 (the Developer API page shows it with /v1). */
 export const chatUrl = (base: string) => base.trim().replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/chat/completions";
 /** How long to wait when the Syok worker itself is throttled by Cloudflare (Workers Free plan: 10 ms of CPU per request). Such a throttle lasts a few minutes, so wait patiently instead of giving up. Tests shorten these. */
@@ -166,13 +188,13 @@ async function chat(base: string, key: string, body: any, f: typeof fetch, signa
   while (true) {
     let emitted = false; let wait = 0;
     try {
-      const payload = onToken ? { ...body, stream: true, stream_options: { include_usage: true } } : body;
+      const shaped = shapeBody(base, body);
+      const payload = onToken ? { ...shaped, stream: true, stream_options: { include_usage: true } } : shaped;
       const r = await f(chatUrl(base), { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body: JSON.stringify(payload), signal });
       if (r.ok) {
-        const route = { provider: r.headers.get("x-syok-provider") || "", model: r.headers.get("x-syok-model") || "", attempts: r.headers.get("x-syok-attempts") || "", details: r.headers.get("x-syok-attempt-details") || "" };
-        if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) { const sse = await readSSE(r.body, (s) => { emitted = true; onToken(s); }); sse.__route = route; return sse; }
+        if (onToken && r.body && (r.headers.get("content-type") || "").includes("text/event-stream")) { const sse = await readSSE(r.body, (s) => { emitted = true; onToken(s); }); sse.__route = routeOf(base, r.headers, sse.__model); return sse; }
         const data = await r.json() as any;
-        if (data && typeof data === "object") data.__route = route;
+        if (data && typeof data === "object") data.__route = routeOf(base, r.headers, data.model);
         return data;
       }
       const bodyText = briefBody(await r.text());
