@@ -64,7 +64,7 @@ and stops if one is missing or not logged in.
 | Tool | Command the bench runs | Limits the tool enforces | Tokens / cost read from |
 |---|---|---|---|
 | Syok Code | `syok -p "<task>" --json --mode auto --no-stream --model <m> --cwd <dir> --max-steps <n>` | steps | `usage` in the `--json` result; cost from `bench/prices.json` |
-| Claude Code | `claude -p "<task>" --output-format json --model <m> --dangerously-skip-permissions --no-session-persistence --max-turns <n> --max-budget-usd <usd>` | turns, budget | `modelUsage` / `usage` and `total_cost_usd` (Claude Code's own estimate) |
+| Claude Code | `claude -p "<task>" --output-format json --model <m> --dangerously-skip-permissions --no-session-persistence --max-turns <n> --max-budget-usd <usd>` (in a SWE-bench container also `--bare`, run as a non-root user; with `--no-web` also `--disallowedTools WebSearch WebFetch`) | turns, budget | `modelUsage` / `usage` and `total_cost_usd` (Claude Code's own estimate) |
 | Codex CLI | `codex exec --json -m <m> --sandbox workspace-write --skip-git-repo-check --ephemeral -C <dir> "<task>"` | none | the last `turn.completed` event's `usage`; cost from `bench/prices.json` |
 | Cursor CLI | `agent -p "<task>" --output-format json --model <m> --force --trust --workspace <dir>` | none | not reported by Cursor: shown as **unknown** |
 
@@ -72,8 +72,9 @@ Sources are written at the top of each adapter (`bench/adapters/*.ts`). Anything
 official documentation or source is marked `UNVERIFIED` in the code and printed as a warning when that tool is used. The
 bench never guesses a number: what a tool does not report is shown as `unknown`.
 
-`bench/prices.json` holds US dollars per million tokens, used only for tools that do not report a cost. It is empty on purpose:
-copy the current prices from each provider's pricing page. Costs worked out this way are marked "(est.)".
+`bench/prices.json` holds US dollars per million tokens, used only for tools that do not report a cost. Only prices checked
+on the provider's own pricing page go in (today: `claude-sonnet-5`, checked 23 Nov 2026; the source is written next to it).
+Costs worked out this way are marked "(est.)".
 
 ## Step 2: check the bench itself (free)
 
@@ -196,8 +197,11 @@ Outcomes: `resolved`, `wrong-patch` (applied, tests fail), `did-not-apply`, `no-
 ### In the cloud (GitHub Actions): the pilot workflow
 
 Actions > "bench pilot (SWE-bench Verified)" > Run workflow. It runs on GitHub's Ubuntu machine with Docker, so nothing runs
-on your computer. Inputs: `tool` (`gold`, `noop`, `syok`, or a comma list such as `gold,noop`), `n` (default 5, fixed seed
-42) or `ids`, `model`, `max_spend_usd` (default 5), `cost_per_instance_usd`, `max_steps`, `timeout_sec`, `official`. For
+on your computer. Inputs: `tool` (`gold`, `noop`, `syok`, `syok-direct`, `claude`, or a comma list such as `gold,noop`),
+`n` (default 5, fixed seed 42) or `ids`, `runs` (how many times each paid lane runs, default 1), `model` (the `syok` lane
+only), `max_spend_usd` (default 5, for all paid runs together), `cost_per_instance_usd`, `max_steps`, `timeout_sec`,
+`official`. The inputs, the secrets each lane needs and the money plan are checked first (`bun bench/swebench/lane.ts check`);
+then every lane and run is its own job, and a last job writes one summary table. For
 `syok` it builds Syok Code from the commit being run and puts that build in the containers (`SYOK_BENCH_BUNDLE`), with the
 repository secrets `SYOK_BASE_URL` and `SYOK_API_KEY` (the address is hidden in the logs; `bench/swebench/scrub.ts` removes
 the key and the address from every file and checks that none is left before the summary is written and the files are
@@ -206,6 +210,78 @@ harness result next to the quick grade, with any disagreement marked (the offici
 After the quick grade it grades the same predictions with the official harness (`pip install swebench==5.0.2`,
 `swebench eval verified`). The job summary shows both; the artifact holds `predictions.jsonl`, `results.json`, `results.md`,
 the official report and all logs. The pilot's instances were fixed before any run in `bench/swebench/pilot-ids.txt`.
+
+### The same-model lane: Claude Code vs Syok Code on claude-sonnet-5 (beginner guide)
+
+**What it answers.** Both tools use the very same model, `claude-sonnet-5`, on the very same SWE-bench Verified instances,
+with the very same limits. The only difference is the harness (the instructions and tools around the model), so the
+result says which harness gets more out of the same model.
+
+**How the fair lane works**, step by step, for each instance:
+
+1. GitHub starts a fresh copy of the instance's official SWE-bench container (one job per tool and run, so the runs never
+   share anything and none hits GitHub's 6-hour job limit).
+2. The tool gets the same task text (`promptFor` in `bench/swebench/dataset.ts`), the same step/turn cap (`max_steps`,
+   default 40: Syok Code's `--max-steps`, Claude Code's `--max-turns`), the same time limit (`timeout_sec`, default 1200 s)
+   and **no web** (Syok Code `--no-web`; Claude Code `--disallowedTools WebSearch WebFetch`).
+3. **Claude Code** (`tool: claude`): Claude Code refuses `--dangerously-skip-permissions` when it runs as root, and SWE-bench
+   containers run as root. So the bench makes a normal user (`syokbench`) in the container, installs Claude Code for that
+   user with the official installer (`curl -fsSL https://claude.ai/install.sh | bash -s stable`), gives `/testbed` to that user
+   only while Claude Code runs, and gives it back before the patch is taken. Claude Code runs in `--bare` mode (nothing from
+   the image changes it: no hooks, plugins, MCP servers or CLAUDE.md) and logs in with `ANTHROPIC_API_KEY` only. Its
+   background model and subagent model are pinned to the same model (`ANTHROPIC_DEFAULT_HAIKU_MODEL`,
+   `CLAUDE_CODE_SUBAGENT_MODEL`), and it does not update itself during the run (`DISABLE_AUTOUPDATER=1`).
+4. **Syok Code direct** (`tool: syok-direct`): Syok Code built from the commit being run, talking straight to Anthropic
+   (`SYOK_BASE_URL=https://api.anthropic.com`, `SYOK_API_KEY` = your Anthropic key, for that job only). No Syok router is
+   involved, so no other provider can answer. (The plain `syok` lane still goes through your router with its own secrets.)
+5. After each instance the bench checks **which model answered**: Claude Code's `modelUsage`, Syok Code's `usage.by`. Any
+   answer from a model other than `claude-sonnet-5` is marked **OTHER MODEL ANSWERED** in the tables; when a tool names no
+   model at all, the row says "not confirmed" (never assumed to be fine).
+6. The quick grade and then the **official SWE-bench harness** grade the patch. The official result is the one to report.
+
+**What you must set (once).**
+
+1. An Anthropic API key: https://platform.claude.com > API keys > Create key. Give that key's workspace a **spend limit**
+   there (Limits) that you are happy to lose; this is your real safety net, on top of the bench's own cap.
+2. In this repository on GitHub: Settings > Secrets and variables > Actions > New repository secret. Name
+   `ANTHROPIC_API_KEY`, value: the key. The workflow passes it into the container by **name** only, GitHub hides it in the
+   logs, and `bench/swebench/scrub.ts` removes it from every file before anything is uploaded. Without this secret the
+   workflow refuses to start the `claude` and `syok-direct` lanes and says so; nothing is spent.
+3. Run it: Actions > "bench pilot (SWE-bench Verified)" > Run workflow, with `tool` = `claude,syok-direct`, `runs` = `3`,
+   `n` = `5` (or the pre-registered `ids`), and money inputs that cover the plan (next paragraph).
+
+**Money.** Before anything starts, the plan's worst case must be within `max_spend_usd`:
+`instances x cost_per_instance_usd x runs x paid lanes`. For 5 instances, 3 runs and both lanes at $3 per instance that is
+5 x 3 x 3 x 2 = **$90**, so set `max_spend_usd` to 90 (or lower `cost_per_instance_usd`, `n` or `runs`). Each of the 6 jobs
+may then spend at most its equal share ($15), and stops starting new instances once it has. **Expected cost (a rough
+estimate from token arithmetic, not a measurement):** an instance of up to 40 steps sends roughly 0.5 to 1.5 million input
+tokens in total. Syok Code direct pays the full $2 per million for all of them (about $1 to $3 per instance plus output at
+$10 per million); Claude Code pays mostly the cache-read price of $0.20 per million (well under $1 per instance). So the full
+5 x 3 x 2 pilot is likely in the $20 to $50 range. Prices: `bench/prices.json` (Claude Sonnet 5: $2 in, $10 out, cache reads
+$0.20, cache writes $2.50 (5 minutes) / $4 (1 hour) per million tokens; checked on the official pricing page 23 Nov 2026).
+
+**Reading the summary.** The last job writes one table with a row per lane and run and an "all runs" row per lane:
+official resolved / n, quick grade, steps or turns, tokens in / out (Claude Code's cache reads shown separately; they are
+part of "in"), the models that answered, the same-model check, the tool version, tool time and cost. Claude Code's cost is
+**its own estimate** (`total_cost_usd`, worked out on your machine from its price table, not the bill); Syok Code direct's
+cost is its tokens times `bench/prices.json`. AI runs differ from try to try, so compare all three runs, not one.
+
+**Known unfairness (read before quoting a result).**
+
+- **Prompt caching.** Claude Code talks to Anthropic's own Messages API and uses prompt caching, so most of its input is
+  billed at the cache-read price. Syok Code direct goes through Anthropic's OpenAI-compatible endpoint, where prompt caching
+  is not supported (docs: platform.claude.com/docs/en/api/openai-sdk), so all of its input is billed at the full price. This
+  makes Syok Code look **more expensive** for the same work; it does not change which model answers or the resolved count.
+- **The endpoint itself.** On that OpenAI-compatible endpoint some request fields are ignored (for example `strict` on tool
+  schemas), and it has no extended features of the native API. Claude Code uses the native API.
+- **User rights.** Claude Code runs as a normal user, Syok Code as root (as SWE-bench containers do). Claude Code can change
+  everything in `/testbed` and its home folder, but not files owned by root elsewhere (for example it cannot `pip install`
+  into the image's Python environment). SWE-bench fixes are code changes in `/testbed`, so this should rarely matter.
+- **Cost figures** come from two different methods (Claude Code's own estimate vs. tokens x price list); neither is the bill.
+  Your Anthropic Console usage page is the bill.
+- **Syok Code direct must name the model.** Syok Code learns which provider and model answered from the Syok router's reply
+  headers. Talking straight to Anthropic there are no such headers, so unless Syok Code reads the model from the reply
+  itself, its rows say "not confirmed" and its cost is the tokens priced as `claude-sonnet-5`, marked "model not reported".
 
 ### Grade
 

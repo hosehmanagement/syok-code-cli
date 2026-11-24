@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-// Removes secret values (the Syok key, the Syok address) from every file in a folder before it is uploaded, then checks
-// that none is left. The values are read from environment variables named on the command line, never from the command line
-// itself, and are never printed.
-//   bun bench/swebench/scrub.ts <folder> SYOK_API_KEY SYOK_BASE_URL_HOST
+// Removes secret values (the Syok key, the Syok address, the Anthropic key of the same-model lane) from every file in a folder
+// before it is uploaded, then checks that none is left. The values are read from environment variables named on the command
+// line, never from the command line itself, and are never printed.
+//   bun bench/swebench/scrub.ts <folder> SYOK_API_KEY SYOK_BASE_URL SYOK_HOST SYOK_ACCT ANTHROPIC_API_KEY   (what bench-pilot.yml runs)
 // Exit 0: every file is clean (also when a variable is empty or the folder does not exist).
 // Exit 3: a value could not be removed; every file in the folder is then DELETED so nothing unsafe can be uploaded.
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";

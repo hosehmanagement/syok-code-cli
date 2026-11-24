@@ -10,6 +10,7 @@ export interface CommandCtx {
   limits: Limits;
   inContainer?: boolean;  // true when the tool runs inside a SWE-bench container (bin names may differ)
   scenarioDir?: string;   // only used by the fake adapter
+  noWeb?: boolean;        // switch the tool's web search and web fetch off (the fair lane gives no tool the web)
 }
 export interface ToolCommand {
   cmd: string[];
@@ -29,6 +30,9 @@ export interface Usage {
   /** Models the tool's output says answered (for the same-model check). Empty = the tool did not say. */
   modelsSeen: string[];
   ok: boolean | null;       // the tool's own success flag, when it has one
+  /** Input tokens read from the prompt cache, when the tool says so (Claude Code's modelUsage cacheReadInputTokens).
+   *  They are INCLUDED in inputTokens; this number only shows how many of them were cache reads. */
+  cacheReadTokens?: number | null;
   /** Tokens per answering "<provider> / <model>", when the tool says so (Syok Code's usage.by). */
   byModel?: Record<string, { steps: number; input: number; output: number }>;
 }
@@ -55,6 +59,11 @@ export interface Adapter {
   patchExclude?: string[];
   /** Names of environment variables that carry this tool's login, passed into containers by name only. */
   authEnv?: string[];
+  /** Inside a container, run the tool as this non-root user (created by containerInstall). The project folder is given to
+   *  the user just before the run and given back right after it, so the patch and the grade are taken exactly as before. */
+  runAs?: { user: string; home: string };
+  /** A shell line (run like the tool itself) that prints the tool's version inside the container; kept in the results. */
+  containerVersion?: string;
 }
 export const noUsage = (): Usage => ({ inputTokens: null, outputTokens: null, totalTokens: null, costUsd: null, steps: null, modelsSeen: [], ok: null });
 /** The last JSON object printed on its own line (tools print logs before their JSON result). */
