@@ -198,8 +198,9 @@ PRIMARY_MODEL="${PRIMARY_MODEL:-claude-sonnet-5}"
 check_or_retry() { local out="$1" chk="$2" prep="$3" m; shift 3
   "$chk" "$out" && return 0
   m="$(last_model "$out")"
-  if [ -z "$m" ] || echo "$m" | grep -qiF "$PRIMARY_MODEL"; then echo "RETRY: not retried: attempt 1 missed and its last AI call was answered by ${m:-an unknown model}, not a fallback"; return 1; fi
-  echo "RETRY: attempt 1 missed; its last AI call was answered by the fallback $m (not $PRIMARY_MODEL), so this one AI step is made once more"
+  local want="${RETRY_PRIMARY:-$PRIMARY_MODEL}"   # a step pinned to one model (view_image) names it in RETRY_PRIMARY
+  if [ -z "$m" ] || echo "$m" | grep -qiF "$want"; then echo "RETRY: not retried: attempt 1 missed and its last AI call was answered by ${m:-an unknown model}, not a fallback"; return 1; fi
+  echo "RETRY: attempt 1 missed; its last AI call was answered by the fallback $m (not $want), so this one AI step is made once more"
   "$prep"; ai "$out.retry" "$@"; tail -8 "$out.retry"; show "$out.retry"
   if "$chk" "$out.retry"; then echo "RETRY: attempt 2 passed (its last AI call was answered by $(last_model "$out.retry"))"; return 0; fi
   echo "RETRY: attempt 2 missed too (its last AI call was answered by $(last_model "$out.retry"))"; return 1; }
@@ -319,13 +320,22 @@ if [ -z "$VM" ]; then echo "SKIP view_image: no model that can see images can be
   P="$W/image"; mkdir -p "$P"
   read -r INUM ICOL < <(python3 -I "$FIX" png "$P/shot.png")
   [ -s "$P/shot.png" ] && [ -n "$INUM" ] && ok "image: the picture was made" || bad "image: the picture was not made"
-  ai "$W/image.txt" --cwd "$P" --mode plan --model "$VM" -p "Look at the picture shot.png in this project with view_image. Which number is written in it, and what colour is the bar along its top edge (red, green or blue)? Answer in one line."; tail -8 "$W/image.txt"; show "$W/image.txt"; reads "$P"
-  grep -q '> view_image' "$W/image.txt" && ok "image: the AI used view_image" || bad "image: the AI did not use view_image"
-  has_number "$INUM" "$W/image.txt" && ok "image: the answer has the number $INUM (random, only in the picture)" || bad "image: the answer lacks the number $INUM"
+  # The router does not honour a model name on requests that carry tools (syok-ai-router toolCore: the name only picks the
+  # syok-coder task order, and X-Syok-Lock is refused with tools), so a step may be answered by another provider than $VM.
+  # When the checks miss and the last AI call was not answered by $VM, the step is made once more (check_or_retry); all four
+  # checks below are then made on that ONE attempt, never mixed across attempts.
+  IMG_RUN=(--cwd "$P" --mode plan --model "$VM" -p "Look at the picture shot.png in this project with view_image. Which number is written in it, and what colour is the bar along its top edge (red, green or blue)? Answer in one line.")
+  ai "$W/image.txt" "${IMG_RUN[@]}"; tail -8 "$W/image.txt"; show "$W/image.txt"; reads "$P"
   # the right colour named, and neither of the two other colours (so a list of all three cannot pass)
   OTHERS="$(printf 'red\ngreen\nblue\n' | grep -vx "$ICOL" | paste -sd'|' -)"
-  grep -v '^> ' "$W/image.txt" | grep -qiw "$ICOL" && ! grep -v '^> ' "$W/image.txt" | grep -Eqiw "$OTHERS" && ok "image: the answer names the bar colour $ICOL and no other" || bad "image: the answer does not name the bar colour $ICOL alone"
-  who "$W/image.txt" | grep -qF "$VM" && ok "image: answered by the pinned model $VM" || bad "image: not answered by the pinned model $VM ($(who "$W/image.txt"))"
+  img_colour() { grep -v '^> ' "$1" | grep -qiw "$ICOL" && ! grep -v '^> ' "$1" | grep -Eqiw "$OTHERS"; }
+  img_all() { grep -q '> view_image' "$1" && has_number "$INUM" "$1" && img_colour "$1" && who "$1" | grep -qF "$VM"; }
+  rm -f "$W/image.txt.retry"; RETRY_PRIMARY="$VM" check_or_retry "$W/image.txt" img_all : "${IMG_RUN[@]}"
+  IMG="$W/image.txt"; [ -f "$W/image.txt.retry" ] && IMG="$W/image.txt.retry" && echo "(the image checks below are made on attempt 2)"
+  grep -q '> view_image' "$IMG" && ok "image: the AI used view_image" || bad "image: the AI did not use view_image"
+  has_number "$INUM" "$IMG" && ok "image: the answer has the number $INUM (random, only in the picture)" || bad "image: the answer lacks the number $INUM"
+  img_colour "$IMG" && ok "image: the answer names the bar colour $ICOL and no other" || bad "image: the answer does not name the bar colour $ICOL alone"
+  who "$IMG" | grep -qF "$VM" && ok "image: answered by the pinned model $VM" || bad "image: not answered by the pinned model $VM ($(who "$IMG"))"
 fi
 
 echo "=== 16. interactive terminal with a real AI: a setup wizard that asks two questions (Linux and Mac)"
