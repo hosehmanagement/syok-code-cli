@@ -1,5 +1,14 @@
 {
-  "_readme": "US dollars per MILLION tokens, used only when a tool does not report its own cost (Codex, Syok, Cursor). Keys are matched against the pinned model name (longest match wins). Copy the CURRENT prices from each provider's pricing page. None are filled in on purpose: prices change, and a wrong number would make the results table lie.",
+  "_readme": "US dollars per MILLION tokens, used only when a tool does not report its own cost (Codex, Syok, Cursor). Keys are matched against the pinned model name (longest match wins). Copy the CURRENT prices from each provider's pricing page, and only add a model whose price you checked there: a wrong number would make the results table lie. Only `in` and `out` are used in the cost; the cache_* fields are written down for reference (Syok Code's usage has no cache counts, and Claude Code reports its own cost).",
   "_example": { "some-model-name": { "in": 1.0, "out": 5.0 } },
-  "prices": {}
+  "prices": {
+    "claude-sonnet-5": {
+      "in": 2.0,
+      "out": 10.0,
+      "cache_write_5m": 2.5,
+      "cache_write_1h": 4.0,
+      "cache_read": 0.2,
+      "_source": "Checked 23 Nov 2026: https://platform.claude.com/docs/en/about-claude/pricing (Claude Sonnet 5 row: base input $2, 5m cache writes $2.50, 1h cache writes $4, cache hits $0.20, output $10 per MTok; footnote 3: the $2/$10 launch price is now the standard price) and https://www.anthropic.com/news/claude-sonnet-5 ($2 / $10 per million input / output tokens)."
+    }
+  }
 }

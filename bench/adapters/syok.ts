@@ -60,6 +60,7 @@ export const syok: Adapter = {
   },
   command(ctx) {
     const cmd = [...syokBin(ctx.inContainer), "-p", ctx.prompt, "--json", "--mode", "auto", "--no-stream", "--model", ctx.model, "--cwd", ctx.cwd];
+    if (ctx.noWeb) cmd.push("--no-web"); // web_search and web_fetch off (src/main.ts help text)
     const enforced: Array<"steps" | "cost"> = [];
     if (ctx.limits.maxSteps) { cmd.push("--max-steps", String(ctx.limits.maxSteps)); enforced.push("steps"); }
     return { cmd, enforced };
