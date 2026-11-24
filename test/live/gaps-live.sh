@@ -12,8 +12,10 @@ run() { bun "$SYOK" "$@"; }
 # ("The AI service failed") - the same run is made again after the limit's minute has passed, at most twice. The answer itself
 # is never looked at here: a wrong or refused answer is never retried, it goes to the checks below and fails them.
 PROVIDER_ERR='The AI service failed|\(error 429|HTTP 429 from'
+# Each run writes its own usage history (one line per AI call, with the provider and model that answered) next to its output,
+# so last_model can tell which model answered the run's LAST call.
 ai() { local out="$1"; shift; local code try=0
-  while :; do run "$@" > "$out" 2>&1; code=$?
+  while :; do rm -rf "$out.usage"; SYOK_USAGE_DIR="$out.usage" SYOK_USAGE_LOG=1 bun "$SYOK" "$@" > "$out" 2>&1; code=$?
     grep -Eq "$PROVIDER_ERR" "$out" && [ $try -lt 2 ] || return $code
     try=$((try+1)); echo "(provider error, not an answer: $(grep -Eo "$PROVIDER_ERR" "$out" | head -1); asking again in 65 s, $try/2)"; sleep 65
   done; }
@@ -182,6 +184,25 @@ const res = new Map(m.filter((x) => x.role === "tool").map((x) => [x.tool_call_i
 for (const x of m) for (const c of x.tool_calls || []) if (c.function?.name === "read_file") { let a = {}; try { a = JSON.parse(c.function.arguments || "{}"); } catch {}
   console.log("  " + JSON.stringify(a.path) + " -> " + JSON.stringify((res.get(c.id) ?? "(no result)").slice(0, 160))); }'
 reads() { echo "--- read_file results (from the saved chat):"; bun -e "$SESSION_JS" "$1"; echo "---"; }
+# The provider / model that answered the LAST AI call of the run whose output is $1 ("" when its usage history is missing).
+last_model() { local f; f="$(ls "$1.usage"/*.jsonl 2>/dev/null | sort | tail -1)"; [ -n "$f" ] || return 0
+  tail -1 "$f" | bun -e 'let t = ""; for await (const c of process.stdin) t += c; try { const j = JSON.parse(t); console.log([j.provider, j.model].filter(Boolean).join(" / ")); } catch {}'; }
+# The model syok-coder sends code steps to first. When a step ends on another model, Syok fell back to it after provider errors.
+PRIMARY_MODEL="${PRIMARY_MODEL:-claude-sonnet-5}"
+# check_or_retry <output> <check> <prepare> <ai arguments...>
+# Runs <check> (a function given an output file) on the output. If it misses AND the last AI call of that run was answered by a
+# fallback model (not $PRIMARY_MODEL), the same AI step is made ONCE more from the same starting point (<prepare> puts it
+# back; ":" when nothing to put back) into <output>.retry, and the very same check decides. Both attempts are reported in
+# RETRY lines. A miss on the primary model, a miss with an unknown model, and a second miss all return failure: no check is
+# made weaker, only a fallback model's answer gets one more try.
+check_or_retry() { local out="$1" chk="$2" prep="$3" m; shift 3
+  "$chk" "$out" && return 0
+  m="$(last_model "$out")"
+  if [ -z "$m" ] || echo "$m" | grep -qiF "$PRIMARY_MODEL"; then echo "RETRY: not retried: attempt 1 missed and its last AI call was answered by ${m:-an unknown model}, not a fallback"; return 1; fi
+  echo "RETRY: attempt 1 missed; its last AI call was answered by the fallback $m (not $PRIMARY_MODEL), so this one AI step is made once more"
+  "$prep"; ai "$out.retry" "$@"; tail -8 "$out.retry"; show "$out.retry"
+  if "$chk" "$out.retry"; then echo "RETRY: attempt 2 passed (its last AI call was answered by $(last_model "$out.retry"))"; return 0; fi
+  echo "RETRY: attempt 2 missed too (its last AI call was answered by $(last_model "$out.retry"))"; return 1; }
 
 echo "=== 12. the todo list with a real AI, kept through a shortened chat: three sessions, the fact only the list still holds"
 # profiles.json in the project makes the chat be shortened (summarized) early, as in a long task. The release code is read
@@ -198,7 +219,9 @@ order="$(grep -E '^\[.\] [1-5]\. ' "$W/todo1.txt" | head -5 | sed -E 's/^\[.\] (
 [ "$order" = "12345" ] && grep -qE "^\[.\] 5\. .*$CODE" "$W/todo1.txt" && ok "todo: session 1 made the five-item list in order, item 5 holds the code" || bad "todo: session 1 list wrong (order '$order', or item 5 lacks the code)"
 rm -f "$P/notes/release.txt"   # from here on the code is in no file
 ai "$W/todo2.txt" "${TODO_RUN[@]}" --continue -p "Session 2: do item 2 of your todo list only and mark it done. Leave items 3 to 5 pending and call finish (if you are reminded about open items, call finish again)."; tail -6 "$W/todo2.txt"; show "$W/todo2.txt"
-ai "$W/todo3.txt" "${TODO_RUN[@]}" --continue -p "Session 3, the last one: do the remaining items of your todo list and mark each done. For item 5, write the release code in your final answer exactly as your todo list gives it."; tail -10 "$W/todo3.txt"; show "$W/todo3.txt"
+rm -rf "$W/todo-before3"; cp -a "$P/.syok/sessions" "$W/todo-before3"   # the chat as it was before session 3, for a retry of session 3
+TODO3=(-p "Session 3, the last one: do the remaining items of your todo list and mark each done. For item 5, write the release code in your final answer exactly as your todo list gives it.")
+ai "$W/todo3.txt" "${TODO_RUN[@]}" --continue "${TODO3[@]}"; tail -10 "$W/todo3.txt"; show "$W/todo3.txt"
 cat "$W/todo2.txt" "$W/todo3.txt" | grep -q "(the earlier conversation was summarized to save room)" && ok "todo: the chat was shortened (summarized) in session 2 or 3" || bad "todo: the chat was never summarized"
 reads "$P"
 SESS="$(ls -t "$P/.syok/sessions/"*.json 2>/dev/null | head -1)"
@@ -221,7 +244,9 @@ grep -q "^SAVED_IDS=12345$" "$W/todo-check.txt" && grep -q "^SAVED_DONE_1_4=yes"
 ftxt() { [ -f "$P/out/$1.txt" ] && sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$P/out/$1.txt" | grep -v '^$' | paste -sd'/' - || echo "(missing)"; }
 FILES="one=$(ftxt one) two=$(ftxt two) three=$(ftxt three) four=$(ftxt four)"
 [ "$FILES" = "one=alpha two=beta three=gamma four=delta" ] && ok "todo: the four files were made across the sessions (checked on disk)" || bad "todo: out/*.txt are wrong: $FILES"
-grep -q "$CODE" "$W/todo3.txt" && ok "todo: the last answer has the release code $CODE (its file was deleted after session 1)" || bad "todo: the last answer lacks the release code $CODE"
+todo_code() { grep -q "$CODE" "$1"; }
+todo_back() { rm -rf "$P/.syok/sessions"; cp -a "$W/todo-before3" "$P/.syok/sessions"; }   # session 3 starts again from the same chat
+check_or_retry "$W/todo3.txt" todo_code todo_back "${TODO_RUN[@]}" --continue "${TODO3[@]}" && ok "todo: the last answer has the release code $CODE (its file was deleted after session 1)" || bad "todo: the last answer lacks the release code $CODE"
 grep -q "^CODE_IN_SUMMARY=yes" "$W/todo-check.txt" && echo "NOTE todo: the AI's summary also kept the code, so the answer could have come from either" || echo "NOTE todo: the summary did not keep the code: the answer came from the todo list put back"
 
 echo "=== 13. lsp rename with a real AI: one function renamed everywhere, a method with the same name left alone"
@@ -254,7 +279,8 @@ echo "=== 14. peek_file with a real AI: the one error line in a 150 MB log"
 P="$W/peek"; mkdir -p "$P/logs"
 PCODE="$(python3 -I "$FIX" biglog "$P/logs/service.log" 150)"; echo "log size: $(wc -c < "$P/logs/service.log" | tr -d ' ') bytes"
 [ -n "$PCODE" ] && [ "$(grep -c "$PCODE" "$P/logs/service.log")" = 1 ] && ok "peek: the log was made with one planted error line" || bad "peek: the planted line is missing"
-ai "$W/peek.txt" --cwd "$P" --mode plan --model "$MODEL" -p "Payments stopped overnight. Our service log logs/service.log is about 150 MB, too big to read whole: look inside it with peek_file. Find the single ERROR line that explains why payments stopped and tell me its exact error code (the value after code=) and its line number."; tail -15 "$W/peek.txt"; show "$W/peek.txt"
+PEEK_RUN=(--cwd "$P" --mode plan --model "$MODEL" -p "Payments stopped overnight. Our service log logs/service.log is about 150 MB, too big to read whole: look inside it with peek_file. Find the single ERROR line that explains why payments stopped and tell me its exact error code (the value after code=) and its line number.")
+ai "$W/peek.txt" "${PEEK_RUN[@]}"; tail -15 "$W/peek.txt"; show "$W/peek.txt"
 grep -q '> peek_file' "$W/peek.txt" && ok "peek: the AI used peek_file" || bad "peek: the AI did not use peek_file"
 # What must be proven is that the whole log never reaches the AI. read_file refuses files over 2 MB and points to peek_file,
 # so an attempt refused that way is the designed behaviour, not a failure. Checked in the saved chat: every read_file call on
@@ -265,7 +291,9 @@ LOGREADS="$(grep -F 'service.log' "$W/peek-reads.txt")"
 if [ -z "$LOGREADS" ]; then ok "peek: read_file was not called on the big log"
 elif ! echo "$LOGREADS" | grep -vqF 'Error: file is larger than 2 MB. Use peek_file' && ! echo "$LOGREADS" | grep -qE '20[0-9]{2}-[0-9]{2}-[0-9]{2}T|INFO|WARN|ERROR'; then ok "peek: every read_file on the big log ($(echo "$LOGREADS" | wc -l | tr -d ' ') call(s)) was refused with the pointer to peek_file; no log content reached the AI"
 else bad "peek: a read_file on the big log was not refused, or returned log content"; fi
-grep -q "$PCODE" "$W/peek.txt" && ok "peek: the answer has the exact code $PCODE (random, only in the log)" || bad "peek: the answer lacks the code $PCODE"
+# A second attempt must also have used peek_file itself (read_file cannot return the log: it refuses files over 2 MB).
+peek_code() { grep -q "$PCODE" "$1" && { [ "$1" = "$W/peek.txt" ] || grep -q '> peek_file' "$1"; }; }
+check_or_retry "$W/peek.txt" peek_code : "${PEEK_RUN[@]}" && ok "peek: the answer has the exact code $PCODE (random, only in the log)" || bad "peek: the answer lacks the code $PCODE"
 rm -rf "$P"
 
 echo "=== 15. view_image with a real AI: a picture of a random number (needs a model that can see images)"
@@ -315,12 +343,19 @@ with open(".wizard-result", "w") as f:
     f.write("%s|%s|%s\n" % (name, build, code))
 print("REGISTRATION " + code)
 PY
-  ai "$W/pty.txt" --cwd "$P" --mode auto --no-checks --model "$MODEL" -p "This project has a setup wizard, wizard.py, that asks two questions and only works in an interactive terminal. Run python3 wizard.py with pty_start, answer its questions with pty_send (owner name: Mira Tan, build number: 4096), read its output with pty_read, then stop the terminal with pty_stop. Then reply with the exact REGISTRATION line copied from the terminal."; tail -12 "$W/pty.txt"; show "$W/pty.txt"; reads "$P"
+  PTY_RUN=(--cwd "$P" --mode auto --no-checks --model "$MODEL" -p "This project has a setup wizard, wizard.py, that asks two questions and only works in an interactive terminal. Run python3 wizard.py with pty_start, answer its questions with pty_send (owner name: Mira Tan, build number: 4096), read its output with pty_read, then stop the terminal with pty_stop. Then reply with the exact REGISTRATION line copied from the terminal.")
+  ai "$W/pty.txt" "${PTY_RUN[@]}"; tail -12 "$W/pty.txt"; show "$W/pty.txt"; reads "$P"
   grep -q '> pty_start' "$W/pty.txt" && grep -q '> pty_send' "$W/pty.txt" && ok "pty: the AI used pty_start and pty_send" || bad "pty: the AI did not use pty_start and pty_send"
   grep -q '> pty_read' "$W/pty.txt" && ok "pty: the AI read the terminal with pty_read" || bad "pty: the AI did not use pty_read"
   RES="$(cat "$P/.wizard-result" 2>/dev/null)"; RCODE="${RES##*|}"
   [ "${RES%|*}" = "Mira Tan|4096" ] && ok "pty: the wizard got both answers typed right (Mira Tan, 4096)" || bad "pty: the wizard did not get the right answers: '${RES:-nothing}'"
-  [ -n "$RCODE" ] && grep -q "REGISTRATION $RCODE" "$W/pty.txt" && ok "pty: the answer has the exact line REGISTRATION $RCODE (random, made while it ran)" || bad "pty: the answer lacks REGISTRATION ${RCODE:-?}";;
+  # The code is read from the wizard's own result file each time. A second attempt runs the wizard afresh (new random code) and
+  # must also have used the terminal tools and typed both answers right, as the first attempt was checked for above.
+  pty_code() { local res code; res="$(cat "$P/.wizard-result" 2>/dev/null)"; code="${res##*|}"
+    [ -n "$code" ] && grep -q "REGISTRATION $code" "$1" || return 1
+    [ "$1" = "$W/pty.txt" ] || { [ "${res%|*}" = "Mira Tan|4096" ] && grep -q '> pty_start' "$1" && grep -q '> pty_send' "$1" && grep -q '> pty_read' "$1"; }; }
+  pty_back() { rm -f "$P/.wizard-result"; }
+  check_or_retry "$W/pty.txt" pty_code pty_back "${PTY_RUN[@]}" && ok "pty: the answer has the exact line REGISTRATION $(cat "$P/.wizard-result" 2>/dev/null | sed 's/.*|//') (random, made while it ran)" || bad "pty: the answer lacks REGISTRATION ${RCODE:-?}";;
 *) echo "(not Linux or Mac: interactive terminals are checked there only)";; esac
 
 echo; if [ $fails -eq 0 ]; then echo "All live checks passed."; else echo "$fails live check(s) FAILED"; exit 1; fi
